@@ -7,6 +7,9 @@ class Settings(BaseSettings):
     google_client_secret: str = ""
     jwt_secret: str = "dev-secret-change-in-production"
     frontend_url: str = "http://localhost:5173"
+    backend_url: str = "http://localhost:8000"
+
+    environment: str = "development"  # set to "production" in Cloud Run
 
     model_config = {"env_file": ".env", "extra": "ignore"}
 
