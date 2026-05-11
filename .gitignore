@@ -2,3 +2,10 @@
 __pycache__/
 *.pyc
 .DS_Store
+
+# GCP SDK (installed locally during setup)
+backend/google-cloud-sdk/
+backend/google-cloud-cli-linux-x86_64.tar.gz
+
+# Firebase build cache
+frontend/.firebase/
