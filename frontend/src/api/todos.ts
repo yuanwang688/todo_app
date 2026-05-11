@@ -4,12 +4,35 @@ export interface Todo {
   title: string
   description: string | null
   completed: boolean
+  category: string | null
+  target_date: string | null   // "YYYY-MM-DD"
+  start_date: string | null
+  end_date: string | null
+  estimated_effort: number | null
   created_at: string
   updated_at: string
 }
 
-export type TodoCreate = { title: string; description?: string }
-export type TodoUpdate = { title?: string; description?: string; completed?: boolean }
+export type TodoCreate = {
+  title: string
+  description?: string | null
+  category?: string | null
+  target_date?: string | null
+  start_date?: string | null
+  end_date?: string | null
+  estimated_effort?: number | null
+}
+
+export type TodoUpdate = {
+  title?: string
+  description?: string | null
+  completed?: boolean
+  category?: string | null
+  target_date?: string | null
+  start_date?: string | null
+  end_date?: string | null
+  estimated_effort?: number | null
+}
 
 const BASE = '/api/todos'
 
@@ -24,8 +47,7 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
 }
 
 export const todosApi = {
-  list: (status?: 'active' | 'completed') =>
-    request<Todo[]>(status ? `${BASE}?status=${status}` : BASE),
+  list: () => request<Todo[]>(BASE),
 
   create: (data: TodoCreate) =>
     request<Todo>(BASE, {

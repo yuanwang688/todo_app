@@ -1,6 +1,6 @@
 import uuid
-from datetime import datetime, timezone
-from sqlalchemy import String, Boolean, ForeignKey, Text, func, Uuid
+from datetime import date, datetime, timezone
+from sqlalchemy import String, Boolean, Date, Float, ForeignKey, Text, func, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.types import DateTime
 from .database import Base
@@ -28,6 +28,11 @@ class Todo(Base):
     title: Mapped[str] = mapped_column(String, nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     completed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    category: Mapped[str | None] = mapped_column(String, nullable=True)
+    target_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    start_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    end_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    estimated_effort: Mapped[float | None] = mapped_column(Float, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 

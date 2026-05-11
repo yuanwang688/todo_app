@@ -1,71 +1,76 @@
-import { useState, useRef, useEffect, KeyboardEvent } from 'react'
 import { Todo, TodoUpdate } from '../api/todos'
 
 interface Props {
   todo: Todo
   onUpdate: (id: string, data: TodoUpdate) => Promise<void>
   onDelete: (id: string) => Promise<void>
+  onEdit: (todo: Todo) => void
 }
 
-export function TodoItem({ todo, onUpdate, onDelete }: Props) {
-  const [editing, setEditing] = useState(false)
-  const [draft, setDraft] = useState(todo.title)
-  const inputRef = useRef<HTMLInputElement>(null)
+function fmtDate(d: string) {
+  return new Date(d + 'T00:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+}
 
-  useEffect(() => {
-    if (editing) inputRef.current?.focus()
-  }, [editing])
-
-  const commitEdit = async () => {
-    const trimmed = draft.trim()
-    if (trimmed && trimmed !== todo.title) {
-      await onUpdate(todo.id, { title: trimmed })
-    } else {
-      setDraft(todo.title)
-    }
-    setEditing(false)
-  }
-
-  const handleKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter') commitEdit()
-    if (e.key === 'Escape') { setDraft(todo.title); setEditing(false) }
-  }
-
+export function TodoItem({ todo, onUpdate, onDelete, onEdit }: Props) {
   return (
-    <li className="flex items-center gap-3 rounded-lg border border-gray-200 bg-white px-4 py-3 shadow-sm">
-      <input
-        type="checkbox"
-        checked={todo.completed}
-        onChange={(e) => onUpdate(todo.id, { completed: e.target.checked })}
-        className="h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
-      />
-
-      {editing ? (
+    <li className="rounded-lg border border-gray-200 bg-white px-4 py-3 shadow-sm">
+      <div className="flex items-start gap-3">
         <input
-          ref={inputRef}
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onBlur={commitEdit}
-          onKeyDown={handleKeyDown}
-          className="flex-1 rounded border border-indigo-400 px-2 py-0.5 text-sm focus:outline-none focus:ring-1 focus:ring-indigo-500"
+          type="checkbox"
+          checked={todo.completed}
+          onChange={(e) => onUpdate(todo.id, { completed: e.target.checked })}
+          className="mt-0.5 h-4 w-4 shrink-0 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
         />
-      ) : (
-        <span
-          onDoubleClick={() => { setDraft(todo.title); setEditing(true) }}
-          className={`flex-1 text-sm cursor-pointer select-none ${todo.completed ? 'line-through text-gray-400' : 'text-gray-800'}`}
-          title="Double-click to edit"
-        >
-          {todo.title}
-        </span>
-      )}
 
-      <button
-        onClick={() => onDelete(todo.id)}
-        className="text-gray-400 hover:text-red-500 transition-colors text-lg leading-none"
-        aria-label="Delete todo"
-      >
-        ×
-      </button>
+        <div className="flex-1 min-w-0">
+          <span className={`text-sm font-medium ${todo.completed ? 'line-through text-gray-400' : 'text-gray-800'}`}>
+            {todo.title}
+          </span>
+
+          {/* Metadata row */}
+          {(todo.category || todo.target_date || todo.start_date || todo.estimated_effort != null) && (
+            <div className="mt-1 flex flex-wrap gap-2 text-xs text-gray-500">
+              {todo.category && (
+                <span className="inline-flex items-center rounded-full bg-indigo-50 px-2 py-0.5 font-medium text-indigo-700">
+                  {todo.category}
+                </span>
+              )}
+              {todo.target_date && (
+                <span>🎯 {fmtDate(todo.target_date)}</span>
+              )}
+              {todo.start_date && todo.end_date && (
+                <span>📅 {fmtDate(todo.start_date)} – {fmtDate(todo.end_date)}</span>
+              )}
+              {todo.estimated_effort != null && (
+                <span>⏱ {todo.estimated_effort}h</span>
+              )}
+            </div>
+          )}
+
+          {todo.description && (
+            <p className="mt-1 text-xs text-gray-500 line-clamp-2">{todo.description}</p>
+          )}
+        </div>
+
+        <div className="flex items-center gap-1 shrink-0">
+          <button
+            onClick={() => onEdit(todo)}
+            className="rounded p-1 text-gray-400 hover:text-indigo-500 hover:bg-indigo-50 transition-colors"
+            aria-label="Edit todo"
+          >
+            <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M15.232 5.232l3.536 3.536M9 13l6.586-6.586a2 2 0 112.828 2.828L11.828 15.828a2 2 0 01-1.414.586H9v-2a2 2 0 01.586-1.414z" />
+            </svg>
+          </button>
+          <button
+            onClick={() => onDelete(todo.id)}
+            className="rounded p-1 text-gray-400 hover:text-red-500 hover:bg-red-50 transition-colors text-lg leading-none"
+            aria-label="Delete todo"
+          >
+            ×
+          </button>
+        </div>
+      </div>
     </li>
   )
 }
