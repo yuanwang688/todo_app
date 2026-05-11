@@ -395,3 +395,146 @@ jobs:
 **End-to-end test:**
 Open a PR → merge to `main` → GitHub Actions runs → change is live in production within ~3 minutes with no manual steps.
 
+---
+
+## 14. Phase 4 Deployment Runbook
+
+Run each block in order. Replace `PROJECT_ID` with your chosen GCP project ID throughout.
+
+### 14.1 GCP Project
+
+```bash
+# Create project and set as active
+gcloud projects create PROJECT_ID --name="Todo App"
+gcloud config set project PROJECT_ID
+
+# Link billing (required for Cloud Run and Artifact Registry)
+gcloud billing accounts list                        # find BILLING_ACCOUNT_ID
+gcloud billing projects link PROJECT_ID --billing-account=BILLING_ACCOUNT_ID
+```
+
+### 14.2 Enable APIs
+
+```bash
+gcloud services enable \
+  run.googleapis.com \
+  artifactregistry.googleapis.com \
+  secretmanager.googleapis.com
+```
+
+### 14.3 Artifact Registry
+
+```bash
+gcloud artifacts repositories create todo-backend \
+  --repository-format=docker \
+  --location=us-central1
+
+gcloud auth configure-docker us-central1-docker.pkg.dev
+```
+
+### 14.4 Store Secrets in Secret Manager
+
+Get the Neon **production** branch connection string from the Neon console.
+Replace `postgresql://` with `postgresql+asyncpg://`, wrap in quotes, keep `?sslmode=require`.
+
+```bash
+# DATABASE_URL — Neon production branch
+echo -n 'postgresql+asyncpg://user:pass@host/db?sslmode=require' \
+  | gcloud secrets create DATABASE_URL --data-file=-
+
+# Google OAuth credentials (same client ID/secret as dev — just add the prod redirect URI)
+echo -n 'YOUR_GOOGLE_CLIENT_ID' \
+  | gcloud secrets create GOOGLE_CLIENT_ID --data-file=-
+
+echo -n 'YOUR_GOOGLE_CLIENT_SECRET' \
+  | gcloud secrets create GOOGLE_CLIENT_SECRET --data-file=-
+
+# Generate a strong JWT secret
+openssl rand -hex 32 \
+  | gcloud secrets create JWT_SECRET --data-file=-
+```
+
+### 14.5 Grant Cloud Run Access to Secrets
+
+```bash
+PROJECT_NUMBER=$(gcloud projects describe PROJECT_ID --format="value(projectNumber)")
+
+gcloud projects add-iam-policy-binding PROJECT_ID \
+  --member="serviceAccount:${PROJECT_NUMBER}-compute@developer.gserviceaccount.com" \
+  --role="roles/secretmanager.secretAccessor"
+```
+
+### 14.6 Build and Push Docker Image
+
+```bash
+# Run from repo root
+docker build \
+  -t us-central1-docker.pkg.dev/PROJECT_ID/todo-backend/app:latest \
+  backend/
+
+docker push us-central1-docker.pkg.dev/PROJECT_ID/todo-backend/app:latest
+```
+
+### 14.7 Deploy to Cloud Run
+
+The Firebase Hosting URL (`PROJECT_ID.web.app`) is used for both `FRONTEND_URL` and
+`BACKEND_URL` because Firebase Hosting proxies `/auth/**` and `/api/**` to Cloud Run —
+the browser only ever sees the Firebase domain, so OAuth redirects and cookies use it.
+
+```bash
+gcloud run deploy todo-backend \
+  --image us-central1-docker.pkg.dev/PROJECT_ID/todo-backend/app:latest \
+  --region us-central1 \
+  --allow-unauthenticated \
+  --set-secrets "DATABASE_URL=DATABASE_URL:latest,GOOGLE_CLIENT_ID=GOOGLE_CLIENT_ID:latest,GOOGLE_CLIENT_SECRET=GOOGLE_CLIENT_SECRET:latest,JWT_SECRET=JWT_SECRET:latest" \
+  --set-env-vars "ENVIRONMENT=production,FRONTEND_URL=https://PROJECT_ID.web.app,BACKEND_URL=https://PROJECT_ID.web.app"
+```
+
+### 14.8 Run Production Migration
+
+```bash
+cd backend
+# Temporarily set DATABASE_URL to the Neon production branch connection string
+DATABASE_URL='postgresql+asyncpg://user:pass@host/db?sslmode=require' \
+  .venv/bin/alembic upgrade head
+```
+
+### 14.9 Firebase Hosting Setup and Deploy
+
+```bash
+npm install -g firebase-tools
+firebase login
+
+# Create a Firebase project linked to your GCP project
+firebase projects:addfirebase PROJECT_ID
+
+# Update .firebaserc with your project ID
+cd frontend
+sed -i 's/YOUR_PROJECT_ID/PROJECT_ID/' .firebaserc
+
+# Build and deploy
+npm run build
+firebase deploy --only hosting
+```
+
+The app will be live at `https://PROJECT_ID.web.app`.
+
+### 14.10 Update Google OAuth Redirect URI
+
+In [Google Cloud Console](https://console.cloud.google.com) → **APIs & Services** → **Credentials** → your OAuth 2.0 Client ID:
+
+Add to **Authorised redirect URIs**:
+```
+https://PROJECT_ID.web.app/auth/google/callback
+```
+
+### 14.11 End-to-End Verification
+
+```bash
+# Health check
+curl https://PROJECT_ID.web.app/api/health
+# Expected: {"status":"ok"}
+```
+
+Then open `https://PROJECT_ID.web.app` in a browser, sign in with Google, and verify full CRUD works.
+
