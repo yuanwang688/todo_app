@@ -13,6 +13,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 See `DESIGN.md` for full architecture, data model, API design, and phased implementation plan.
 
+**Keep `DESIGN.md` in sync with the code.** Any time behaviour changes — new fields, modified API endpoints, auth flow changes, new UI views — update the relevant section of `DESIGN.md` in the same commit.
+
 ## Local Development
 
 ### Backend
