@@ -6,6 +6,8 @@ from .config import settings
 
 def _make_engine():
     url = make_url(settings.database_url)
+    if url.drivername.startswith("sqlite"):
+        return create_async_engine(url, echo=False)
     # asyncpg uses connect_args ssl= instead of the sslmode URL param
     sslmode = url.query.get("sslmode", "")
     stripped = url.set(query={k: v for k, v in url.query.items() if k != "sslmode"})

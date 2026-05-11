@@ -1,4 +1,5 @@
 import secrets
+import uuid
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlencode
 
@@ -153,7 +154,7 @@ async def get_current_user(
     except (JWTError, KeyError):
         raise HTTPException(status_code=401, detail="Invalid session")
 
-    result = await db.execute(select(User).where(User.id == user_id))
+    result = await db.execute(select(User).where(User.id == uuid.UUID(user_id)))
     user = result.scalar_one_or_none()
     if not user:
         raise HTTPException(status_code=401, detail="User not found")
