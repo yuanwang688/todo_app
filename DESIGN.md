@@ -405,12 +405,12 @@ Run each block in order. Replace `PROJECT_ID` with your chosen GCP project ID th
 
 ```bash
 # Create project and set as active
-gcloud projects create PROJECT_ID --name="Todo App"
-gcloud config set project PROJECT_ID
+gcloud projects create todo-app-yw688 --name="Todo App"
+gcloud config set project todo-app-yw688
 
 # Link billing (required for Cloud Run and Artifact Registry)
 gcloud billing accounts list                        # find BILLING_ACCOUNT_ID
-gcloud billing projects link PROJECT_ID --billing-account=BILLING_ACCOUNT_ID
+gcloud billing projects link todo-app-yw688 --billing-account=BILLING_ACCOUNT_ID
 ```
 
 ### 14.2 Enable APIs
@@ -457,9 +457,9 @@ openssl rand -hex 32 \
 ### 14.5 Grant Cloud Run Access to Secrets
 
 ```bash
-PROJECT_NUMBER=$(gcloud projects describe PROJECT_ID --format="value(projectNumber)")
+PROJECT_NUMBER=$(gcloud projects describe todo-app-yw688 --format="value(projectNumber)")
 
-gcloud projects add-iam-policy-binding PROJECT_ID \
+gcloud projects add-iam-policy-binding todo-app-yw688 \
   --member="serviceAccount:${PROJECT_NUMBER}-compute@developer.gserviceaccount.com" \
   --role="roles/secretmanager.secretAccessor"
 ```
@@ -469,25 +469,25 @@ gcloud projects add-iam-policy-binding PROJECT_ID \
 ```bash
 # Run from repo root
 docker build \
-  -t us-central1-docker.pkg.dev/PROJECT_ID/todo-backend/app:latest \
+  -t us-central1-docker.pkg.dev/todo-app-yw688/todo-backend/app:latest \
   backend/
 
-docker push us-central1-docker.pkg.dev/PROJECT_ID/todo-backend/app:latest
+docker push us-central1-docker.pkg.dev/todo-app-yw688/todo-backend/app:latest
 ```
 
 ### 14.7 Deploy to Cloud Run
 
-The Firebase Hosting URL (`PROJECT_ID.web.app`) is used for both `FRONTEND_URL` and
+The Firebase Hosting URL (`todo-app-yw688.web.app`) is used for both `FRONTEND_URL` and
 `BACKEND_URL` because Firebase Hosting proxies `/auth/**` and `/api/**` to Cloud Run —
 the browser only ever sees the Firebase domain, so OAuth redirects and cookies use it.
 
 ```bash
 gcloud run deploy todo-backend \
-  --image us-central1-docker.pkg.dev/PROJECT_ID/todo-backend/app:latest \
+  --image us-central1-docker.pkg.dev/todo-app-yw688/todo-backend/app:latest \
   --region us-central1 \
   --allow-unauthenticated \
   --set-secrets "DATABASE_URL=DATABASE_URL:latest,GOOGLE_CLIENT_ID=GOOGLE_CLIENT_ID:latest,GOOGLE_CLIENT_SECRET=GOOGLE_CLIENT_SECRET:latest,JWT_SECRET=JWT_SECRET:latest" \
-  --set-env-vars "ENVIRONMENT=production,FRONTEND_URL=https://PROJECT_ID.web.app,BACKEND_URL=https://PROJECT_ID.web.app"
+  --set-env-vars "ENVIRONMENT=production,FRONTEND_URL=https://todo-app-yw688.web.app,BACKEND_URL=https://todo-app-yw688.web.app"
 ```
 
 ### 14.8 Run Production Migration
@@ -506,18 +506,18 @@ npm install -g firebase-tools
 firebase login
 
 # Create a Firebase project linked to your GCP project
-firebase projects:addfirebase PROJECT_ID
+firebase projects:addfirebase todo-app-yw688
 
 # Update .firebaserc with your project ID
 cd frontend
-sed -i 's/YOUR_PROJECT_ID/PROJECT_ID/' .firebaserc
+sed -i 's/YOUR_todo-app-yw688/todo-app-yw688/' .firebaserc
 
 # Build and deploy
 npm run build
 firebase deploy --only hosting
 ```
 
-The app will be live at `https://PROJECT_ID.web.app`.
+The app will be live at `https://todo-app-yw688.web.app`.
 
 ### 14.10 Update Google OAuth Redirect URI
 
@@ -525,16 +525,16 @@ In [Google Cloud Console](https://console.cloud.google.com) → **APIs & Service
 
 Add to **Authorised redirect URIs**:
 ```
-https://PROJECT_ID.web.app/auth/google/callback
+https://todo-app-yw688.web.app/auth/google/callback
 ```
 
 ### 14.11 End-to-End Verification
 
 ```bash
 # Health check
-curl https://PROJECT_ID.web.app/api/health
+curl https://todo-app-yw688.web.app/api/health
 # Expected: {"status":"ok"}
 ```
 
-Then open `https://PROJECT_ID.web.app` in a browser, sign in with Google, and verify full CRUD works.
+Then open `https://todo-app-yw688.web.app` in a browser, sign in with Google, and verify full CRUD works.
 

@@ -8,4 +8,5 @@ WORKDIR /app
 COPY --from=builder /install /usr/local
 COPY app/ ./app/
 EXPOSE 8000
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips=*"]
+# Shell form so $PORT is expanded at runtime (Cloud Run injects PORT=8080)
+CMD uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --proxy-headers --forwarded-allow-ips=*

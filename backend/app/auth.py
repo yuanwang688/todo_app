@@ -27,6 +27,22 @@ def _redirect_uri() -> str:
     return f"{settings.backend_url}/auth/google/callback"
 
 
+def _make_state() -> str:
+    payload = {
+        "nonce": secrets.token_urlsafe(16),
+        "exp": datetime.now(timezone.utc) + timedelta(minutes=5),
+    }
+    return jwt.encode(payload, settings.jwt_secret, algorithm=_JWT_ALGORITHM)
+
+
+def _verify_state(state: str) -> bool:
+    try:
+        jwt.decode(state, settings.jwt_secret, algorithms=[_JWT_ALGORITHM])
+        return True
+    except JWTError:
+        return False
+
+
 def _mint_jwt(user_id: str) -> str:
     payload = {
         "sub": user_id,
@@ -37,7 +53,7 @@ def _mint_jwt(user_id: str) -> str:
 
 def _set_session_cookie(response: Response, token: str) -> None:
     response.set_cookie(
-        "session",
+        "__session",
         token,
         httponly=True,
         secure=settings.environment == "production",
@@ -53,7 +69,7 @@ def _set_session_cookie(response: Response, token: str) -> None:
 
 @router.get("/auth/google")
 async def login_google():
-    state = secrets.token_urlsafe(32)
+    state = _make_state()
     params = {
         "client_id": settings.google_client_id,
         "redirect_uri": _redirect_uri(),
@@ -62,11 +78,7 @@ async def login_google():
         "state": state,
         "access_type": "online",
     }
-    response = RedirectResponse(f"{_GOOGLE_AUTH_URL}?{urlencode(params)}")
-    response.set_cookie(
-        "oauth_state", state, httponly=True, max_age=300, samesite="lax", path="/"
-    )
-    return response
+    return RedirectResponse(f"{_GOOGLE_AUTH_URL}?{urlencode(params)}")
 
 
 @router.get("/auth/google/callback")
@@ -76,8 +88,7 @@ async def auth_google_callback(
     state: str,
     db: AsyncSession = Depends(get_db),
 ):
-    stored_state = request.cookies.get("oauth_state")
-    if not stored_state or stored_state != state:
+    if not _verify_state(state):
         raise HTTPException(status_code=400, detail="Invalid OAuth state")
 
     async with httpx.AsyncClient() as client:
@@ -116,14 +127,13 @@ async def auth_google_callback(
     token = _mint_jwt(str(user.id))
     response = RedirectResponse(settings.frontend_url, status_code=302)
     _set_session_cookie(response, token)
-    response.delete_cookie("oauth_state", path="/")
     return response
 
 
 @router.post("/auth/logout")
 async def logout():
     response = Response()
-    response.delete_cookie("session", path="/")
+    response.delete_cookie("__session", path="/")
     return response
 
 
@@ -134,7 +144,7 @@ async def logout():
 async def get_current_user(
     request: Request, db: AsyncSession = Depends(get_db)
 ) -> User:
-    token = request.cookies.get("session")
+    token = request.cookies.get("__session")
     if not token:
         raise HTTPException(status_code=401, detail="Not authenticated")
     try:
