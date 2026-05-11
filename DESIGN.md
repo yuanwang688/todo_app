@@ -246,3 +246,152 @@ Neon provides free branching — use a separate Neon branch for local dev so mig
 | **Total** | **~$0/month** |
 
 The only cost trigger is sustained high traffic beyond GCP free-tier limits.
+
+---
+
+## 13. Phased Implementation Plan
+
+Each phase ends with a fully testable, end-to-end slice of the application. Later phases build on earlier ones without requiring rework.
+
+---
+
+### Phase 1 — Project Scaffold & Local Dev Environment
+
+**Goal:** Both frontend and backend run locally and talk to each other.
+
+**Backend tasks:**
+- Initialise Python project: `requirements.txt`, virtual environment, `uvicorn` entry point
+- Scaffold FastAPI app with a single `GET /api/health` → `{ "status": "ok" }` endpoint
+- Write `backend/Dockerfile` (multi-stage: build deps → slim runtime image)
+
+**Frontend tasks:**
+- Scaffold with Vite: `npm create vite@latest frontend -- --template react-ts`
+- Install and configure Tailwind CSS
+- Configure Vite dev proxy: `/api/*` → `http://localhost:8000` (eliminates CORS in dev)
+- Minimal `App.tsx` shell: renders "Todo App" heading, calls `/api/health`, displays result
+
+**End-to-end test:**
+```
+uvicorn app.main:app --reload   # backend on :8000
+npm run dev                     # frontend on :5173
+```
+Browser at `localhost:5173` shows the app shell and a live "ok" status from the API.
+
+---
+
+### Phase 2 — Database & Todo CRUD (unauthenticated)
+
+**Goal:** Full create/read/update/delete of todos persisted in Neon, visible in the browser.
+
+**Setup tasks:**
+- Create Neon project; provision a `dev` branch for local development
+- Add `DATABASE_URL` to a local `.env` file (not committed)
+
+**Backend tasks:**
+- `database.py`: async SQLAlchemy engine + session factory using `asyncpg`
+- `models.py`: `User` and `Todo` ORM models matching the data model in §7
+- Alembic: `alembic init` + first migration generating both tables
+- CRUD router (`routers/todos.py`): all five endpoints from §8
+  - Temporarily hardcode a fixed `user_id` UUID (removed in Phase 3)
+- Pydantic schemas (`schemas.py`): `TodoCreate`, `TodoUpdate`, `TodoResponse`
+
+**Frontend tasks:**
+- `api/todos.ts`: typed `fetch` wrappers for each endpoint
+- `components/TodoList.tsx`: renders list of todos
+- `components/TodoItem.tsx`: checkbox toggle, inline title edit, delete button
+- `components/AddTodoForm.tsx`: controlled input + submit
+- Wire everything into `App.tsx` with `useState` / `useEffect`
+
+**End-to-end test:**
+Add a todo → refresh the page → todo still present (persisted in Neon).
+Toggle complete → delete → verify in Neon dev console.
+
+---
+
+### Phase 3 — Google OAuth & Per-User Authentication
+
+**Goal:** Users log in with Google; each user sees only their own todos.
+
+**Setup tasks:**
+- Create OAuth 2.0 credentials in Google Cloud Console
+  - Authorised redirect URI: `http://localhost:8000/auth/google/callback`
+- Add `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `JWT_SECRET` to `.env`
+
+**Backend tasks:**
+- `auth.py`:
+  - `GET /auth/google`: generate `state` token, store in short-lived cookie, redirect to Google
+  - `GET /auth/google/callback`: validate `state`, exchange code for tokens via Authlib, verify `id_token`, upsert user row, mint JWT, set `session` cookie (`httpOnly`, `Secure`, `SameSite=Lax`), redirect to frontend
+  - `POST /auth/logout`: clear session cookie
+  - `get_current_user` dependency: decode JWT from cookie, return `User` or raise `401`
+- `routers/users.py`: `GET /api/me` → `{ id, email, name }`
+- Apply `get_current_user` dependency to all `/api/todos` routes; replace hardcoded `user_id` with `current_user.id`
+
+**Frontend tasks:**
+- `hooks/useAuth.ts`: calls `/api/me` on mount; holds `user | null` state
+- `components/LoginButton.tsx`: "Sign in with Google" → navigates to `/auth/google`
+- `components/Header.tsx`: shows user name + logout button when authenticated
+- Gate the todo UI behind auth: unauthenticated users see only the login screen
+
+**End-to-end test:**
+Log in as User A → add todos → log out → log in as User B → User B's list is empty.
+Log back in as User A → original todos still present.
+
+---
+
+### Phase 4 — Cloud Deployment (manual)
+
+**Goal:** The full application runs at a public HTTPS URL on GCP.
+
+**GCP one-time setup:**
+- Enable APIs: Cloud Run, Artifact Registry, Secret Manager
+- Create Artifact Registry repository
+- Store secrets in Secret Manager: `DATABASE_URL` (Neon production branch), `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `JWT_SECRET`
+- Grant the Cloud Run service account `roles/secretmanager.secretAccessor`
+- Create Firebase project; enable Hosting
+
+**Backend deploy:**
+```bash
+docker build -t REGION-docker.pkg.dev/PROJECT/REPO/todo-backend:latest backend/
+docker push REGION-docker.pkg.dev/PROJECT/REPO/todo-backend:latest
+gcloud run deploy todo-backend \
+  --image REGION-docker.pkg.dev/PROJECT/REPO/todo-backend:latest \
+  --region REGION --allow-unauthenticated \
+  --set-secrets DATABASE_URL=DATABASE_URL:latest,...
+```
+- Run Alembic migration against Neon production branch once
+
+**Frontend deploy:**
+- Add `firebase.json` with `/api/**` rewrite → Cloud Run service URL
+- `npm run build && firebase deploy`
+- Update OAuth redirect URI in Google Cloud Console to `https://<cloud-run-url>/auth/google/callback`
+
+**End-to-end test:**
+Visit the Firebase Hosting URL in a browser → log in with Google → full CRUD works against the production database.
+
+---
+
+### Phase 5 — CI/CD Pipeline
+
+**Goal:** Every merge to `main` automatically builds and deploys both frontend and backend.
+
+**Tasks:**
+- Configure Workload Identity Federation between GitHub Actions and GCP (avoids long-lived service account keys)
+- Write `.github/workflows/deploy.yml`:
+
+```
+on: push to main
+jobs:
+  deploy-backend:
+    - docker build + push to Artifact Registry
+    - gcloud run deploy (rolling update, zero downtime)
+  deploy-frontend:
+    - npm ci && npm run build
+    - firebase deploy --only hosting
+```
+
+- Add branch protection on `main`: require the workflow to pass before merge
+- Add a smoke-test step: `curl https://<firebase-url>/api/health` must return `200` after deploy
+
+**End-to-end test:**
+Open a PR → merge to `main` → GitHub Actions runs → change is live in production within ~3 minutes with no manual steps.
+
