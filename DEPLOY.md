@@ -13,12 +13,23 @@ Monitor runs at: `https://github.com/yuanwang688/todo_app/actions`
 
 ## Database migrations
 
-Migrations are **not** run by CI/CD — run them manually before deploying a backend change that requires them:
+Migrations are **not** run by CI/CD — run them manually **against the production database** before deploying a backend change that requires them.
+
+> **Important:** your local `.env` points to the Neon dev branch. Always use the production `DATABASE_URL` from Secret Manager when migrating production:
 
 ```bash
 cd backend
 source .venv/bin/activate
-alembic upgrade head
+
+DATABASE_URL="$(gcloud secrets versions access latest --secret=DATABASE_URL --project=todo-app-yw688)" \
+  alembic upgrade head
+```
+
+To verify the current migration version on production:
+
+```bash
+DATABASE_URL="$(gcloud secrets versions access latest --secret=DATABASE_URL --project=todo-app-yw688)" \
+  alembic current
 ```
 
 ---
