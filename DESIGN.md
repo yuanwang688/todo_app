@@ -18,11 +18,13 @@ Build a web-based todo list application with:
 - Users can log out
 
 ### Todo Items
-- Create a todo item with a title and optional description
-- Edit an existing todo item's title or description
+- Create a todo item with title, optional description, category, target date, start/end dates, and estimated effort (hours)
+- Edit any field on an existing todo item via a modal form
 - Mark a todo item as complete / incomplete (checkbox)
 - Delete a todo item
 - View all items, filterable by status (all / active / completed)
+- **Daily view:** shows tasks whose target date matches the selected day, or whose start–end range overlaps it; navigate by day
+- **Weekly view:** shows tasks whose target date falls within the selected Mon–Sun week, or whose start–end range overlaps it; navigate by week
 - Items are scoped to the authenticated user — no cross-user visibility
 
 ### General
@@ -128,19 +130,24 @@ CREATE TABLE users (
 );
 
 CREATE TABLE todos (
-    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id     UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    title       TEXT NOT NULL,
-    description TEXT,
-    completed   BOOLEAN NOT NULL DEFAULT false,
-    created_at  TIMESTAMPTZ DEFAULT now(),
-    updated_at  TIMESTAMPTZ DEFAULT now()
+    id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id           UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    title             TEXT NOT NULL,
+    description       TEXT,
+    completed         BOOLEAN NOT NULL DEFAULT false,
+    category          TEXT,
+    target_date       DATE,
+    start_date        DATE,
+    end_date          DATE,
+    estimated_effort  FLOAT,             -- hours
+    created_at        TIMESTAMPTZ DEFAULT now(),
+    updated_at        TIMESTAMPTZ DEFAULT now()
 );
 
 CREATE INDEX ON todos(user_id);
 ```
 
-A `updated_at` trigger (or SQLAlchemy `onupdate`) keeps the timestamp current on every PATCH.
+A `updated_at` trigger keeps the timestamp current on every PATCH. All date and effort fields are nullable.
 
 ---
 
@@ -154,9 +161,9 @@ All `/api/*` routes require a valid `session` cookie (JWT). Requests without a v
 | `GET` | `/auth/google/callback` | OAuth callback; sets `session` cookie; redirects to frontend |
 | `POST` | `/auth/logout` | Clears the session cookie |
 | `GET` | `/api/me` | Returns `{ id, email, name }` for the current user |
-| `GET` | `/api/todos` | Lists todos for current user (`?status=active\|completed\|all`) |
-| `POST` | `/api/todos` | Creates a todo (`{ title, description? }`) |
-| `PATCH` | `/api/todos/{id}` | Updates `title`, `description`, and/or `completed` |
+| `GET` | `/api/todos` | Lists all todos for current user |
+| `POST` | `/api/todos` | Creates a todo (`{ title, description?, category?, target_date?, start_date?, end_date?, estimated_effort? }`) |
+| `PATCH` | `/api/todos/{id}` | Updates any writable field on a todo |
 | `DELETE` | `/api/todos/{id}` | Deletes a todo |
 
 All responses are JSON. Errors follow `{ "detail": "<message>" }` (FastAPI default).
@@ -182,7 +189,8 @@ All responses are JSON. Errors follow `{ "detail": "<message>" }` (FastAPI defau
 ```
 
 **Security notes:**
-- `state` parameter prevents CSRF on the OAuth callback
+- OAuth `state` is a short-lived signed JWT (not a cookie) — Firebase Hosting strips non-`__session` cookies from requests forwarded to Cloud Run, so stateless signed state is used instead
+- The session cookie is named `__session` (the only cookie Firebase Hosting forwards to Cloud Run)
 - `httpOnly` cookie blocks JavaScript access to the JWT (XSS mitigation)
 - All PATCH/DELETE handlers verify the todo's `user_id` matches the JWT's `user_id` before acting
 
@@ -394,6 +402,43 @@ jobs:
 
 **End-to-end test:**
 Open a PR → merge to `main` → GitHub Actions runs → change is live in production within ~3 minutes with no manual steps.
+
+---
+
+### Phase 6 — Rich Task Fields & Date Views
+
+**Goal:** Tasks carry scheduling metadata; users can see what's due today or this week.
+
+**New fields on `todos`** (all nullable, migration 002):
+| Field | Type | Description |
+|---|---|---|
+| `category` | TEXT | Free-form label (e.g. "Work", "Personal") |
+| `target_date` | DATE | Single due date |
+| `start_date` | DATE | Start of a date range |
+| `end_date` | DATE | End of a date range |
+| `estimated_effort` | FLOAT | Estimated hours |
+
+**Backend tasks:**
+- Add columns in `models.py`; write Alembic migration 002
+- Extend `TodoCreate`, `TodoUpdate`, `TodoResponse` schemas
+
+**Frontend tasks:**
+- `TodoModal`: full-featured create/edit form (replaces inline add input)
+- `TodoItem`: show category badge, target date, start–end range, and effort in the item row
+- `useTodos`: remove server-side status filter; always fetch all todos, filter client-side
+- **Daily tab**: filter to tasks whose `target_date` equals the selected day, or whose `start_date`–`end_date` overlaps it; ‹ Prev / Next › day navigation
+- **Weekly tab**: same overlap logic over the Mon–Sun week containing the selected date; week navigation
+
+**Filtering logic:**
+```
+daily:   target_date == day  OR  (start_date <= day AND end_date >= day)
+weekly:  (target_date IN [week_start, week_end])
+         OR (start_date <= week_end AND end_date >= week_start)
+```
+
+**End-to-end test:**
+Create a task with a target date of today → appears in Daily view.
+Create a task with start/end dates spanning the current week → appears in Weekly view but not in next week's view.
 
 ---
 
