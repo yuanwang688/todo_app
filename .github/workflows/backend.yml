@@ -50,3 +50,9 @@ jobs:
             --image $IMAGE:${{ github.sha }} \
             --region us-central1 \
             --project todo-app-yw688
+
+      - name: Smoke test
+        if: github.event_name == 'push'
+        run: |
+          sleep 5
+          curl --fail https://todo-app-yw688.web.app/api/health
