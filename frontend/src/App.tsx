@@ -117,6 +117,18 @@ function TodoApp({ user, onLogout }: TodoAppProps) {
   const { start: weekStart, end: weekEnd } = getWeekBounds(viewDate)
   const visible = filterTodos(todos, tab, viewDate)
 
+  const getDueTag = (todo: Todo): string | undefined => {
+    if (tab === 'daily') {
+      if (todo.target_date === toDateStr(viewDate)) return 'Due Today'
+    }
+    if (tab === 'weekly') {
+      const ws = toDateStr(weekStart)
+      const we = toDateStr(weekEnd)
+      if (todo.target_date && todo.target_date >= ws && todo.target_date <= we) return 'Due This Week'
+    }
+    return undefined
+  }
+
   return (
     <div className="min-h-screen bg-gray-50 py-10 px-4">
       <div className="mx-auto max-w-2xl">
@@ -162,7 +174,7 @@ function TodoApp({ user, onLogout }: TodoAppProps) {
         {loading ? (
           <p className="text-center text-sm text-gray-400 py-8">Loading…</p>
         ) : (
-          <TodoList todos={visible} onUpdate={update} onDelete={remove} onEdit={openEdit} />
+          <TodoList todos={visible} onUpdate={update} onDelete={remove} onEdit={openEdit} getDueTag={getDueTag} />
         )}
       </div>
 

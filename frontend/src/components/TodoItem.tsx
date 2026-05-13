@@ -5,13 +5,14 @@ interface Props {
   onUpdate: (id: string, data: TodoUpdate) => Promise<void>
   onDelete: (id: string) => Promise<void>
   onEdit: (todo: Todo) => void
+  dueTag?: string
 }
 
 function fmtDate(d: string) {
   return new Date(d + 'T00:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
 }
 
-export function TodoItem({ todo, onUpdate, onDelete, onEdit }: Props) {
+export function TodoItem({ todo, onUpdate, onDelete, onEdit, dueTag }: Props) {
   return (
     <li className="rounded-lg border border-gray-200 bg-white px-4 py-3 shadow-sm">
       <div className="flex items-start gap-3">
@@ -28,8 +29,17 @@ export function TodoItem({ todo, onUpdate, onDelete, onEdit }: Props) {
           </span>
 
           {/* Metadata row */}
-          {(todo.category || todo.target_date || todo.start_date || todo.estimated_effort != null) && (
+          {(dueTag || todo.category || todo.target_date || todo.start_date || todo.estimated_effort != null) && (
             <div className="mt-1 flex flex-wrap gap-2 text-xs text-gray-500">
+              {dueTag && (
+                <span className={`inline-flex items-center rounded-full px-2 py-0.5 font-semibold ${
+                  dueTag === 'Due Today'
+                    ? 'bg-red-100 text-red-700'
+                    : 'bg-amber-100 text-amber-700'
+                }`}>
+                  {dueTag}
+                </span>
+              )}
               {todo.category && (
                 <span className="inline-flex items-center rounded-full bg-indigo-50 px-2 py-0.5 font-medium text-indigo-700">
                   {todo.category}
