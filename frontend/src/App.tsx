@@ -87,6 +87,8 @@ function TodoApp({ user, onLogout }: TodoAppProps) {
   const [viewDate, setViewDate] = useState(new Date())
   const [modalOpen, setModalOpen] = useState(false)
   const [editingTodo, setEditingTodo] = useState<Todo | undefined>(undefined)
+  const [categoryFilter, setCategoryFilter] = useState<string | null>(null)
+  const [dueFilter, setDueFilter] = useState<'today' | 'week' | null>(null)
 
   const { todos, loading, error, add, update, remove } = useTodos()
 
@@ -115,7 +117,20 @@ function TodoApp({ user, onLogout }: TodoAppProps) {
   }
 
   const { start: weekStart, end: weekEnd } = getWeekBounds(viewDate)
+
+  const categories = [...new Set(todos.map((t) => t.category).filter((c): c is string => Boolean(c)))].sort()
+  const todayStr = toDateStr(new Date())
+  const { start: curWeekStart, end: curWeekEnd } = getWeekBounds(new Date())
+  const curWeekStartStr = toDateStr(curWeekStart)
+  const curWeekEndStr = toDateStr(curWeekEnd)
+
   const visible = filterTodos(todos, tab, viewDate)
+    .filter((t) => !categoryFilter || t.category === categoryFilter)
+    .filter((t) => {
+      if (dueFilter === 'today') return t.target_date === todayStr
+      if (dueFilter === 'week') return Boolean(t.target_date) && t.target_date! >= curWeekStartStr && t.target_date! <= curWeekEndStr
+      return true
+    })
 
   const getDueTag = (todo: Todo): string | undefined => {
     if (tab === 'daily') {
@@ -166,6 +181,45 @@ function TodoApp({ user, onLogout }: TodoAppProps) {
             <button onClick={() => shiftWeek(-1)} className="px-2 py-1 rounded hover:bg-gray-200 transition-colors">‹ Prev</button>
             <span className="font-medium text-gray-700">{fmtWeek(weekStart, weekEnd)}</span>
             <button onClick={() => shiftWeek(1)} className="px-2 py-1 rounded hover:bg-gray-200 transition-colors">Next ›</button>
+          </div>
+        )}
+
+        {/* Filter bar */}
+        {(categories.length > 0 || true) && (
+          <div className="flex flex-wrap gap-2 mb-4">
+            <button
+              onClick={() => setDueFilter(dueFilter === 'today' ? null : 'today')}
+              className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold transition-colors ${
+                dueFilter === 'today'
+                  ? 'bg-red-100 text-red-700 ring-1 ring-red-300'
+                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+              }`}
+            >
+              Due Today
+            </button>
+            <button
+              onClick={() => setDueFilter(dueFilter === 'week' ? null : 'week')}
+              className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold transition-colors ${
+                dueFilter === 'week'
+                  ? 'bg-amber-100 text-amber-700 ring-1 ring-amber-300'
+                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+              }`}
+            >
+              Due This Week
+            </button>
+            {categories.map((cat) => (
+              <button
+                key={cat}
+                onClick={() => setCategoryFilter(categoryFilter === cat ? null : cat)}
+                className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium transition-colors ${
+                  categoryFilter === cat
+                    ? 'bg-indigo-100 text-indigo-700 ring-1 ring-indigo-300'
+                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                }`}
+              >
+                {cat}
+              </button>
+            ))}
           </div>
         )}
 
