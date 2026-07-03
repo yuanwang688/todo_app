@@ -23,6 +23,7 @@ class TodoUpdate(BaseModel):
     start_date: Optional[date] = None
     end_date: Optional[date] = None
     estimated_effort: Optional[float] = None
+    is_focus: Optional[bool] = None
 
 
 class TodoResponse(BaseModel):
@@ -36,6 +37,7 @@ class TodoResponse(BaseModel):
     start_date: Optional[date]
     end_date: Optional[date]
     estimated_effort: Optional[float]
+    is_focus: bool
     created_at: datetime
     updated_at: datetime
 

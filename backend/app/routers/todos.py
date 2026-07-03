@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, update
 from ..auth import get_current_user
 from ..database import get_db
 from ..models import Todo, User
@@ -52,7 +52,14 @@ async def update_todo(
     todo = result.scalar_one_or_none()
     if not todo:
         raise HTTPException(status_code=404, detail="Todo not found")
-    for field, value in body.model_dump(exclude_unset=True).items():
+    updates = body.model_dump(exclude_unset=True)
+    if updates.get("is_focus"):
+        await db.execute(
+            update(Todo)
+            .where(Todo.user_id == current_user.id, Todo.id != todo_id)
+            .values(is_focus=False)
+        )
+    for field, value in updates.items():
         setattr(todo, field, value)
     todo.updated_at = datetime.now(timezone.utc)
     await db.commit()

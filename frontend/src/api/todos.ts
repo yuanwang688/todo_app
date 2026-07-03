@@ -9,6 +9,7 @@ export interface Todo {
   start_date: string | null
   end_date: string | null
   estimated_effort: number | null
+  is_focus: boolean
   created_at: string
   updated_at: string
 }
@@ -32,6 +33,7 @@ export type TodoUpdate = {
   start_date?: string | null
   end_date?: string | null
   estimated_effort?: number | null
+  is_focus?: boolean
 }
 
 const BASE = '/api/todos'
