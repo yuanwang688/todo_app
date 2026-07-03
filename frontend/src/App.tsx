@@ -38,12 +38,9 @@ function fmtWeek(start: Date, end: Date) {
 
 // ─── filter logic ────────────────────────────────────────────────────────────
 
-type TabValue = 'all' | 'active' | 'completed' | 'daily' | 'weekly'
+type TabValue = 'all' | 'daily' | 'weekly'
 
 function filterTodos(todos: Todo[], tab: TabValue, viewDate: Date): Todo[] {
-  if (tab === 'active') return todos.filter((t) => !t.completed)
-  if (tab === 'completed') return todos.filter((t) => t.completed)
-
   if (tab === 'daily') {
     const d = toDateStr(viewDate)
     return todos.filter(
@@ -71,8 +68,6 @@ function filterTodos(todos: Todo[], tab: TabValue, viewDate: Date): Todo[] {
 
 const TABS: { label: string; value: TabValue }[] = [
   { label: 'All', value: 'all' },
-  { label: 'Active', value: 'active' },
-  { label: 'Completed', value: 'completed' },
   { label: 'Daily', value: 'daily' },
   { label: 'Weekly', value: 'weekly' },
 ]
@@ -89,6 +84,7 @@ function TodoApp({ user, onLogout }: TodoAppProps) {
   const [editingTodo, setEditingTodo] = useState<Todo | undefined>(undefined)
   const [categoryFilter, setCategoryFilter] = useState<string | null>(null)
   const [dueFilter, setDueFilter] = useState<'today' | 'week' | null>(null)
+  const [showCompleted, setShowCompleted] = useState(false)
 
   const { todos, loading, error, add, update, remove } = useTodos()
 
@@ -125,6 +121,7 @@ function TodoApp({ user, onLogout }: TodoAppProps) {
   const curWeekEndStr = toDateStr(curWeekEnd)
 
   const visible = filterTodos(todos, tab, viewDate)
+    .filter((t) => showCompleted || !t.completed)
     .filter((t) => !categoryFilter || t.category === categoryFilter)
     .filter((t) => {
       if (dueFilter === 'today') return t.target_date === todayStr
@@ -187,6 +184,16 @@ function TodoApp({ user, onLogout }: TodoAppProps) {
         {/* Filter bar */}
         {(categories.length > 0 || true) && (
           <div className="flex flex-wrap gap-2 mb-4">
+            <button
+              onClick={() => setShowCompleted(!showCompleted)}
+              className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold transition-colors ${
+                showCompleted
+                  ? 'bg-green-100 text-green-700 ring-1 ring-green-300'
+                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+              }`}
+            >
+              Show Completed
+            </button>
             <button
               onClick={() => setDueFilter(dueFilter === 'today' ? null : 'today')}
               className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold transition-colors ${
