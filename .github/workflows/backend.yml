@@ -58,6 +58,14 @@ jobs:
           docker push $IMAGE:${{ github.sha }}
           docker push $IMAGE:latest
 
+      - name: Run migrations
+        if: github.event_name == 'push'
+        run: |
+          pip install -r requirements.txt
+          DATABASE_URL=$(gcloud secrets versions access latest --secret=DATABASE_URL --project=todo-app-yw688) \
+            alembic upgrade head
+        working-directory: backend
+
       - name: Deploy to Cloud Run
         if: github.event_name == 'push'
         run: |
