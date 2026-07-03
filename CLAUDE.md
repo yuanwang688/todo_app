@@ -44,6 +44,15 @@ cd backend
 pytest tests/test_todos.py::test_create_todo -v
 ```
 
+## Testing After Changes
+
+After making any change, test it before reporting done:
+
+- **UI / behavior change** — open the app in a browser and verify the feature works end-to-end, including edge cases. Use the browser automation tools available in the session.
+- **Refactor (no behavior change)** — run the relevant unit/integration tests to confirm nothing broke: `cd backend && pytest -v` for backend, `cd frontend && npm test` for frontend (once tests exist).
+
+If neither test suite exists yet, say so explicitly rather than claiming success.
+
 ## Project Structure
 
 ```
