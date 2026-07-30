@@ -21,6 +21,9 @@ Build a web-based todo list application with:
 - Create a todo item with title, optional description, category, target date, start/end dates, and estimated effort (hours)
 - Edit any field on an existing todo item via a modal form
 - Mark a todo item as complete / incomplete (checkbox)
+- Set an importance level (low / medium / high, or leave unclassified)
+- Lock a todo item so the assistant cannot propose changes to it
+- Star a todo item as the current focus (at most one per user)
 - Delete a todo item
 - View all items, filterable by status (all / active / completed)
 - **Daily view:** shows tasks whose target date matches the selected day, or whose start–end range overlaps it; navigate by day
@@ -140,6 +143,9 @@ CREATE TABLE todos (
     start_date        DATE,
     end_date          DATE,
     estimated_effort  FLOAT,             -- hours
+    is_focus          BOOLEAN NOT NULL DEFAULT false,  -- at most one per user
+    importance        SMALLINT,          -- 1 low / 2 medium / 3 high; NULL = unclassified
+    locked            BOOLEAN NOT NULL DEFAULT false,  -- user veto against the assistant
     created_at        TIMESTAMPTZ DEFAULT now(),
     updated_at        TIMESTAMPTZ DEFAULT now()
 );
@@ -148,6 +154,11 @@ CREATE INDEX ON todos(user_id);
 ```
 
 A `updated_at` trigger keeps the timestamp current on every PATCH. All date and effort fields are nullable.
+
+`importance` and `locked` support the todo assistant (`AI_ASSISTANT_PLAN.md`, `TRIAGE.md`).
+`importance` is the user-owned half of the Eisenhower matrix — urgency is derived from
+dates by `app/triage.py` and is never stored. `locked` marks a task the assistant may read
+but never propose changes to; it does not restrict the owner's own edits.
 
 ---
 

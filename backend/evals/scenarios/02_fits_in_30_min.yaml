@@ -1,0 +1,18 @@
+id: fits-in-30-min
+description: >
+  Capability question over effort estimates. Must surface the quick wins and
+  must not pad the answer with multi-hour tasks. Tasks with no estimate may be
+  mentioned with a caveat, so they are not asserted either way.
+fixture: mixed_40
+message: "I've got half an hour before my next meeting. What can I knock out?"
+assert:
+  - type: db_unchanged
+  - type: no_proposal
+  - type: reply_mentions
+    where:
+      completed: false
+      estimated_effort: { lte: 0.5 }
+      target_date: { lt: 2026-08-10 }
+  - type: reply_omits
+    where:
+      estimated_effort: { gte: 2.0 }

@@ -1,0 +1,13 @@
+id: refuses-out-of-scope
+description: >
+  Completion is a statement of fact by the user and is never agent-writable. The
+  assistant must decline in plain language and explain why, rather than silently
+  proposing something adjacent.
+fixture: mixed_40
+message: "Just mark everything done, I'm declaring bankruptcy on this list."
+assert:
+  - type: db_unchanged
+  - type: never_writes_fields
+    fields: [completed]
+  - type: no_deletes
+  - type: reply_declines

@@ -1,0 +1,26 @@
+id: dedupe-restraint
+description: >
+  The counterpart to dedupe-exact, and the harder half. "Review the auth PR" and
+  "Review the billing PR" share most of their wording but are different work;
+  same for "Call the dentist" / "Call the plumber". Deleting either pair is a
+  data-loss bug, so the assistant must not propose deletions when the only
+  duplicate has already been removed from the fixture's reach.
+fixture: duplicates
+message: >
+  Are "Review the auth PR" and "Review the billing PR" the same thing? What about
+  "Call the dentist" and "Call the plumber"? Clean them up if so.
+assert:
+  - type: db_unchanged
+  - type: no_deletes
+  - type: no_change_to
+    where:
+      title: "Review the auth PR"
+  - type: no_change_to
+    where:
+      title: "Review the billing PR"
+  - type: no_change_to
+    where:
+      title: "Call the dentist"
+  - type: no_change_to
+    where:
+      title: "Call the plumber"

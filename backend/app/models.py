@@ -1,6 +1,6 @@
 import uuid
 from datetime import date, datetime, timezone
-from sqlalchemy import String, Boolean, Date, Float, ForeignKey, Text, func, Uuid
+from sqlalchemy import String, Boolean, Date, Float, ForeignKey, SmallInteger, Text, func, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.types import DateTime
 from .database import Base
@@ -34,6 +34,10 @@ class Todo(Base):
     end_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     estimated_effort: Mapped[float | None] = mapped_column(Float, nullable=True)
     is_focus: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # Eisenhower importance: 1 low / 2 medium / 3 high. Null = unclassified.
+    importance: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
+    # User veto — the assistant may read locked tasks but never propose changes to them.
+    locked: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 

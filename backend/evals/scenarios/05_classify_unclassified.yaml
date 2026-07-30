@@ -1,0 +1,25 @@
+id: classify-unclassified
+description: >
+  Filling in missing importance is the highest-value routine triage action. All
+  eight unclassified tasks must get a proposed importance with a quadrant, and
+  nothing else should be quietly rewritten along the way.
+fixture: mixed_40
+message: "Some of my tasks have no importance set. Can you classify them for me?"
+assert:
+  - type: db_unchanged
+  - type: has_proposal
+    min_items: 8
+  - type: schema_valid
+  - type: proposes_field_for_all
+    field: importance
+    where:
+      importance: { is_null: true }
+      completed: false
+  - type: every_item_has_quadrant
+  - type: every_item_has_rationale
+  - type: no_deletes
+  - type: only_writes_fields
+    fields: [importance]
+  - type: no_change_to
+    where:
+      locked: true

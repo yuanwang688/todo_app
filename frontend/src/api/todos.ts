@@ -1,3 +1,12 @@
+/** Eisenhower importance — see TRIAGE.md. `null` means unclassified. */
+export type Importance = 1 | 2 | 3
+
+export const IMPORTANCE_LABELS: Record<Importance, string> = {
+  1: 'Low',
+  2: 'Medium',
+  3: 'High',
+}
+
 export interface Todo {
   id: string
   user_id: string
@@ -10,6 +19,9 @@ export interface Todo {
   end_date: string | null
   estimated_effort: number | null
   is_focus: boolean
+  importance: Importance | null
+  /** User veto — the assistant may read locked tasks but never propose changes. */
+  locked: boolean
   created_at: string
   updated_at: string
 }
@@ -22,6 +34,8 @@ export type TodoCreate = {
   start_date?: string | null
   end_date?: string | null
   estimated_effort?: number | null
+  importance?: Importance | null
+  locked?: boolean
 }
 
 export type TodoUpdate = {
@@ -34,6 +48,8 @@ export type TodoUpdate = {
   end_date?: string | null
   estimated_effort?: number | null
   is_focus?: boolean
+  importance?: Importance | null
+  locked?: boolean
 }
 
 const BASE = '/api/todos'

@@ -1,4 +1,4 @@
-import { Todo, TodoUpdate } from '../api/todos'
+import { Todo, TodoUpdate, Importance, IMPORTANCE_LABELS } from '../api/todos'
 
 interface Props {
   todo: Todo
@@ -10,6 +10,12 @@ interface Props {
 
 function fmtDate(d: string) {
   return new Date(d + 'T00:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+}
+
+const IMPORTANCE_BADGE: Record<Importance, string> = {
+  1: 'bg-gray-100 text-gray-600',
+  2: 'bg-sky-50 text-sky-700',
+  3: 'bg-rose-50 text-rose-700',
 }
 
 export function TodoItem({ todo, onUpdate, onDelete, onEdit, dueTag }: Props) {
@@ -29,8 +35,19 @@ export function TodoItem({ todo, onUpdate, onDelete, onEdit, dueTag }: Props) {
           </span>
 
           {/* Metadata row */}
-          {(dueTag || todo.category || todo.target_date || todo.start_date || todo.estimated_effort != null) && (
+          {(dueTag || todo.category || todo.target_date || todo.start_date ||
+            todo.estimated_effort != null || todo.importance != null || todo.locked) && (
             <div className="mt-1 flex flex-wrap gap-2 text-xs text-gray-500">
+              {todo.importance != null && (
+                <span className={`inline-flex items-center rounded-full px-2 py-0.5 font-medium ${IMPORTANCE_BADGE[todo.importance]}`}>
+                  {IMPORTANCE_LABELS[todo.importance]}
+                </span>
+              )}
+              {todo.locked && (
+                <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 font-medium text-slate-600">
+                  🔒 Locked
+                </span>
+              )}
               {dueTag && (
                 <span className={`inline-flex items-center rounded-full px-2 py-0.5 font-semibold ${
                   dueTag === 'Due Today'
@@ -63,6 +80,20 @@ export function TodoItem({ todo, onUpdate, onDelete, onEdit, dueTag }: Props) {
         </div>
 
         <div className="flex items-center gap-1 shrink-0">
+          <button
+            onClick={() => onUpdate(todo.id, { locked: !todo.locked })}
+            className={`rounded p-1 transition-colors ${todo.locked ? 'text-slate-600 hover:bg-slate-100' : 'text-gray-300 hover:text-slate-500 hover:bg-slate-50'}`}
+            aria-label={todo.locked ? 'Unlock task' : 'Lock task'}
+            title={todo.locked ? 'Locked — the assistant cannot change this task' : 'Lock this task so the assistant cannot change it'}
+          >
+            <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              {todo.locked ? (
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+              ) : (
+                <path strokeLinecap="round" strokeLinejoin="round" d="M8 11V7a4 4 0 018 0m-4 8v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2z" />
+              )}
+            </svg>
+          </button>
           <button
             onClick={() => onUpdate(todo.id, { is_focus: !todo.is_focus })}
             className={`rounded p-1 transition-colors ${todo.is_focus ? 'text-amber-500 hover:text-amber-600 hover:bg-amber-100' : 'text-gray-400 hover:text-amber-500 hover:bg-amber-50'}`}
