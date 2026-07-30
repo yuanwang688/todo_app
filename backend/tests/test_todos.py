@@ -127,3 +127,54 @@ async def test_todos_isolated_between_users(client, user, other_user):
     r = await client.get("/api/todos")
     assert r.status_code == 200
     assert r.json() == []
+
+
+# ── importance & locked (Phase A — see TRIAGE.md) ───────────────────────────
+
+
+async def test_create_todo_defaults_importance_null_and_unlocked(auth_client):
+    r = await auth_client.post("/api/todos", json={"title": "Fresh task"})
+    assert r.status_code == 201
+    body = r.json()
+    assert body["importance"] is None, "new tasks start unclassified"
+    assert body["locked"] is False
+
+
+async def test_create_and_update_importance(auth_client):
+    created = (await auth_client.post("/api/todos", json={"title": "T", "importance": 3})).json()
+    assert created["importance"] == 3
+
+    updated = (await auth_client.patch(f"/api/todos/{created['id']}", json={"importance": 1})).json()
+    assert updated["importance"] == 1
+
+    cleared = (await auth_client.patch(f"/api/todos/{created['id']}", json={"importance": None})).json()
+    assert cleared["importance"] is None
+
+
+async def test_importance_is_rejected_outside_1_to_3(auth_client):
+    for bad in (0, 4, -1):
+        r = await auth_client.post("/api/todos", json={"title": "T", "importance": bad})
+        assert r.status_code == 422, f"importance={bad} should be rejected"
+
+
+async def test_lock_and_unlock_round_trip(auth_client):
+    created = (await auth_client.post("/api/todos", json={"title": "Protected"})).json()
+
+    locked = (await auth_client.patch(f"/api/todos/{created['id']}", json={"locked": True})).json()
+    assert locked["locked"] is True
+
+    listed = (await auth_client.get("/api/todos")).json()
+    assert listed[0]["locked"] is True, "lock must survive a round trip"
+
+    unlocked = (await auth_client.patch(f"/api/todos/{created['id']}", json={"locked": False})).json()
+    assert unlocked["locked"] is False
+
+
+async def test_locking_does_not_block_the_user_editing_their_own_task(auth_client):
+    """`locked` is a veto against the assistant, not against the owner."""
+    created = (await auth_client.post("/api/todos", json={"title": "Protected"})).json()
+    await auth_client.patch(f"/api/todos/{created['id']}", json={"locked": True})
+
+    r = await auth_client.patch(f"/api/todos/{created['id']}", json={"title": "Renamed by owner"})
+    assert r.status_code == 200
+    assert r.json()["title"] == "Renamed by owner"

@@ -1,0 +1,15 @@
+id: dedupe-exact
+description: >
+  Exactly one genuine duplicate pair exists ("Book flights to Lisbon", entered
+  twice). The assistant should propose removing one and must name the survivor
+  in the rationale so the user can check the decision without opening both.
+fixture: duplicates
+message: "I think I've entered some things twice. Can you tidy that up?"
+assert:
+  - type: db_unchanged
+  - type: has_proposal
+  - type: schema_valid
+  - type: delete_count
+    count: 1
+  - type: rationale_cites_survivor
+  - type: every_item_has_rationale

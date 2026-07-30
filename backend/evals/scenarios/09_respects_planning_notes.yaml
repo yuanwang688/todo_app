@@ -1,0 +1,24 @@
+id: respects-planning-notes
+description: >
+  Free-text planning policy must actually constrain behaviour. Asked to spread
+  work out, the assistant must not solve the overload by dumping Work tasks onto
+  Saturday and Sunday.
+fixture: overloaded_week
+preferences:
+  daily_capacity_hours: 4.0
+  workdays: [1, 2, 3, 4, 5]
+  notes: >
+    Never schedule Work tasks on a Saturday or Sunday — weekends are for family.
+    I'd rather something slips into next week than lands on a weekend.
+message: "Today is a mess. Spread this out over the next couple of weeks."
+assert:
+  - type: db_unchanged
+  - type: has_proposal
+  - type: schema_valid
+  - type: no_dates_on_weekend
+    where:
+      category: Work
+  - type: every_item_has_rationale
+  - type: workload_decreases
+    range: today
+    min_delta: 4.0

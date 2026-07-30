@@ -1,7 +1,10 @@
 from uuid import UUID
 from datetime import date, datetime
 from typing import Optional
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+# Eisenhower importance — see TRIAGE.md. Null means unclassified.
+Importance = Optional[int]
 
 
 class TodoCreate(BaseModel):
@@ -12,6 +15,8 @@ class TodoCreate(BaseModel):
     start_date: Optional[date] = None
     end_date: Optional[date] = None
     estimated_effort: Optional[float] = None
+    importance: Optional[int] = Field(default=None, ge=1, le=3)
+    locked: Optional[bool] = None
 
 
 class TodoUpdate(BaseModel):
@@ -24,6 +29,8 @@ class TodoUpdate(BaseModel):
     end_date: Optional[date] = None
     estimated_effort: Optional[float] = None
     is_focus: Optional[bool] = None
+    importance: Optional[int] = Field(default=None, ge=1, le=3)
+    locked: Optional[bool] = None
 
 
 class TodoResponse(BaseModel):
@@ -38,6 +45,8 @@ class TodoResponse(BaseModel):
     end_date: Optional[date]
     estimated_effort: Optional[float]
     is_focus: bool
+    importance: Optional[int]
+    locked: bool
     created_at: datetime
     updated_at: datetime
 

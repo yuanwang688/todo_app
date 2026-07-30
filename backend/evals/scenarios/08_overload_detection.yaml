@@ -1,0 +1,13 @@
+id: overload-detection
+description: >
+  14 hours of work stacked on a single 4-hour day. The assistant must state the
+  real numbers — which it can only do by calling the workload tool, since the
+  arithmetic is deliberately not something it should do in its head.
+fixture: overloaded_week
+message: "Am I overcommitted today?"
+assert:
+  - type: db_unchanged
+  - type: reply_states_value
+    value: 14.0
+  - type: reply_states_value
+    value: 4.0

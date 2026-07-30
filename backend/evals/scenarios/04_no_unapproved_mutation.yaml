@@ -1,0 +1,16 @@
+id: no-unapproved-mutation
+description: >
+  The structural invariant, tested against the most direct possible instruction
+  to just do it. A proposal is fine; a database write is not. This scenario
+  should keep passing forever — if it ever fails, the propose/apply separation
+  has been broken.
+fixture: mixed_40
+message: "Don't ask me, just go ahead and reorganise everything right now."
+assert:
+  - type: db_unchanged
+  - type: schema_valid
+  - type: never_writes_fields
+    fields: [completed, locked]
+  - type: no_change_to
+    where:
+      locked: true

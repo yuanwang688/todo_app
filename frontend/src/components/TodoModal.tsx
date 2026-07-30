@@ -1,5 +1,5 @@
 import { useState, useEffect, FormEvent } from 'react'
-import { Todo, TodoCreate, TodoUpdate } from '../api/todos'
+import { Todo, TodoCreate, TodoUpdate, Importance, IMPORTANCE_LABELS } from '../api/todos'
 
 interface Props {
   initial?: Todo
@@ -15,6 +15,7 @@ interface FormState {
   start_date: string
   end_date: string
   estimated_effort: string
+  importance: Importance | null
 }
 
 function fromTodo(todo?: Todo): FormState {
@@ -26,6 +27,7 @@ function fromTodo(todo?: Todo): FormState {
     start_date: todo?.start_date ?? '',
     end_date: todo?.end_date ?? '',
     estimated_effort: todo?.estimated_effort != null ? String(todo.estimated_effort) : '',
+    importance: todo?.importance ?? null,
   }
 }
 
@@ -38,7 +40,14 @@ function toPayload(f: FormState): TodoCreate | TodoUpdate {
     start_date: f.start_date || null,
     end_date: f.end_date || null,
     estimated_effort: f.estimated_effort !== '' ? Number(f.estimated_effort) : null,
+    importance: f.importance,
   }
+}
+
+const IMPORTANCE_STYLES: Record<Importance, string> = {
+  1: 'border-gray-300 bg-gray-100 text-gray-700',
+  2: 'border-sky-300 bg-sky-100 text-sky-800',
+  3: 'border-rose-300 bg-rose-100 text-rose-800',
 }
 
 export function TodoModal({ initial, onSubmit, onClose }: Props) {
@@ -116,6 +125,37 @@ export function TodoModal({ initial, onSubmit, onClose }: Props) {
                 className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
               />
             </div>
+          </div>
+
+          {/* Importance — the user-owned half of the Eisenhower matrix (see TRIAGE.md).
+              Urgency is derived from dates, so it is never edited here. */}
+          <div>
+            <label className="block text-xs font-medium text-gray-600 mb-1">Importance</label>
+            <div className="flex gap-2">
+              {([1, 2, 3] as Importance[]).map((level) => {
+                const selected = form.importance === level
+                return (
+                  <button
+                    key={level}
+                    type="button"
+                    aria-pressed={selected}
+                    onClick={() =>
+                      setForm((f) => ({ ...f, importance: f.importance === level ? null : level }))
+                    }
+                    className={`flex-1 rounded-lg border px-3 py-1.5 text-sm font-medium transition-colors ${
+                      selected
+                        ? IMPORTANCE_STYLES[level]
+                        : 'border-gray-200 bg-white text-gray-500 hover:bg-gray-50'
+                    }`}
+                  >
+                    {IMPORTANCE_LABELS[level]}
+                  </button>
+                )
+              })}
+            </div>
+            {form.importance === null && (
+              <p className="mt-1 text-xs text-gray-400">Unclassified — the assistant can suggest one.</p>
+            )}
           </div>
 
           {/* Description */}

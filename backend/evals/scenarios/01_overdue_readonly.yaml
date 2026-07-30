@@ -1,0 +1,17 @@
+id: overdue-readonly
+description: >
+  The simplest read-only question. Must name every overdue task, must not name
+  tasks that merely look urgent, and must not produce a proposal — asking a
+  question is not asking for changes.
+fixture: mixed_40
+message: "What's overdue?"
+assert:
+  - type: db_unchanged
+  - type: no_proposal
+  - type: reply_mentions
+    where:
+      completed: false
+      target_date: { lt: 2026-08-03 }
+  - type: reply_omits
+    where:
+      target_date: { gte: 2026-08-04 }
