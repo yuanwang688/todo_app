@@ -90,7 +90,7 @@ ALTER TABLE todos ADD COLUMN locked BOOLEAN NOT NULL DEFAULT false;
 
 `importance` is exposed in `TodoModal` as a three-way selector; `locked` as a small padlock toggle on `TodoItem`.
 
-### 3.2 New tables (migration 005)
+### 3.2 New tables (migration 005 — **shipped**)
 
 ```sql
 CREATE TABLE conversations (
@@ -346,13 +346,32 @@ Each phase ends with a working, testable slice. Estimated effort assumes evening
 - ✅ **Done:** `pytest evals` reports 10 failures, all `agent not implemented`; `pytest` reports
   85 passing unit tests; both fields verified end to end in a browser.
 
-### Phase B — Read-only assistant · ~3 sessions
-- Migration 005 (conversations, messages, agent_runs).
-- Replace the body of `evals/agent_adapter.run_agent` — that is the only seam the evals touch.
-- `app/agent/` package: tool definitions, `search_todos` / `get_todo_details` / `get_workload_summary` services, Tool Runner loop, SSE endpoint.
-- Prompt assembly with caching; `agent_runs` logging (tokens, cache hits, latency, cost).
-- `ChatPanel` with streaming and tool-call chips.
-- ✅ **Done when:** scenarios 1, 2, 8, 10 pass; browser-verified Q&A over a real list; `cache_read_input_tokens > 0` on the second turn.
+### Phase B — Read-only assistant · **code complete, pending a real API key**
+- Migration 005 (conversations, messages, agent_runs) — shipped, verified up/down on Postgres 16.
+- `app/agent/` package: `prompt.py` (frozen system prompt + cached preferences block),
+  `tools.py` (`search_todos` / `get_todo_details` / `get_workload_summary`, all deterministic
+  via `app/triage.py`), `service.py` (the model↔tool loop + persistence + `agent_runs` logging).
+- **Correction to the original plan:** built on the plain Messages API's streaming
+  (`client.messages.stream`) with a hand-written loop, not `client.beta.messages.tool_runner`.
+  The installed SDK's async Tool Runner streaming shape wasn't something I could verify against
+  documentation with confidence; the manual loop is fully documented and lower-risk for a path
+  this central. Revisit once the beta surface is confirmed — the tool schemas don't change either way.
+- `POST /api/chat/messages` streams SSE (`text_delta`, `tool_call`, `error`, `done`);
+  `GET /api/chat` returns the rolling conversation collapsed into display bubbles.
+  `ChatPanel` (slide-in drawer + floating toggle) renders both, with tool-call chips.
+- `evals/agent_adapter.run_agent` now calls the real service — no second code path.
+- **Known gap, deferred:** no `ANTHROPIC_API_KEY` was available in the build environment.
+  `pytest evals` correctly reports "not configured" for all 10 scenarios rather than
+  silently passing. In its place: `tests/test_agent_service.py` (14 tests) drives the loop
+  against a fake client built from real SDK response types — proves history, tool execution,
+  persistence, usage accounting, and refusal/error handling are wired correctly. Separately,
+  the full stack was browser-driven with a syntactically-valid-but-wrong key: the request
+  reached `api.anthropic.com`, got a real 401, and the error surfaced as a clean chat bubble
+  with nothing corrupted in the DB (`agent_runs.status='error'`, zero `messages` rows). What's
+  *not* yet proven: that the model picks the right tool and gives a correct answer for a real
+  question — that needs a working key.
+- ⏳ **Done when a key is added:** run `pytest evals`, confirm scenarios 1, 2, 8, 10 pass;
+  browser-verify a real Q&A turn; confirm `cache_read_input_tokens > 0` on the second turn.
 
 ### Phase C — Proposals, approval, undo · ~4 sessions
 - Migration 006 (proposals, proposal_items, todo_revisions).

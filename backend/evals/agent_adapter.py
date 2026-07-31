@@ -1,23 +1,28 @@
 """The seam between the eval harness and the assistant.
 
-Phase A ships this unimplemented on purpose: the scenarios are the spec, and they
-must fail until the agent exists. Phase B replaces the body of `run_agent` with a
-call into `app.agent.agent_service.run()` and deletes `AgentNotImplemented`.
-
-Nothing else in `evals/` may import the agent directly — this is the only seam.
+Phase A shipped this raising `AgentNotImplemented` unconditionally, so every
+scenario failed for the right reason before the agent existed. Phase B wires
+it to the real agent loop — nothing else in `evals/` changed.
 """
 from __future__ import annotations
 
+import uuid as uuid_module
 from dataclasses import dataclass, field
 from datetime import date
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.agent import service
 from app.agent_schemas import Proposal
 
 
 class AgentNotImplemented(NotImplementedError):
-    """Raised until Phase B wires the real agent in behind this adapter."""
+    """The scenario can't run and should be skipped, not failed.
+
+    Raised when the agent has no code path yet (pre–Phase B) or, now, when
+    `ANTHROPIC_API_KEY` isn't set — there's no meaningful way to grade a model
+    response the harness never got to make.
+    """
 
 
 @dataclass
@@ -47,7 +52,26 @@ async def run_agent(
     The assistant must not mutate any task here — it may only read and propose.
     The `db_unchanged` grader enforces that for every scenario.
     """
-    raise AgentNotImplemented(
-        "The assistant is not built yet (Phase B). "
-        "These scenarios are the spec and are expected to fail until then."
+    if not service.is_configured():
+        raise AgentNotImplemented(
+            "ANTHROPIC_API_KEY is not set. Add it to backend/.env (or export it) "
+            "to run scenarios against the real assistant."
+        )
+
+    convo = await service.get_or_create_conversation(db, uuid_module.UUID(user_id))
+    result = await service.run_turn(
+        db=db,
+        user_id=uuid_module.UUID(user_id),
+        conversation_id=convo.id,
+        message=message,
+        today=today,
+        preferences=preferences,
+    )
+    if result.error:
+        raise RuntimeError(f"agent turn errored: {result.error}")
+
+    return AgentResult(
+        reply_text=result.reply_text,
+        proposal=result.proposal,
+        tool_calls=result.tool_calls,
     )

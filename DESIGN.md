@@ -160,6 +160,45 @@ A `updated_at` trigger keeps the timestamp current on every PATCH. All date and 
 dates by `app/triage.py` and is never stored. `locked` marks a task the assistant may read
 but never propose changes to; it does not restrict the owner's own edits.
 
+```sql
+-- One rolling conversation per user (Phase B — see AI_ASSISTANT_PLAN.md §11)
+CREATE TABLE conversations (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id     UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    title       TEXT,
+    created_at  TIMESTAMPTZ DEFAULT now(),
+    updated_at  TIMESTAMPTZ DEFAULT now()
+);
+
+-- content stores raw Anthropic content blocks verbatim, so a conversation
+-- replays to the API unchanged across HTTP calls
+CREATE TABLE messages (
+    id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    conversation_id  UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+    role             TEXT NOT NULL,   -- user | assistant
+    content          JSONB NOT NULL,
+    created_at       TIMESTAMPTZ DEFAULT now()
+);
+
+-- cost/latency/cache audit log — one row per assistant turn (which may call
+-- the model several times across a tool loop; usage is summed)
+CREATE TABLE agent_runs (
+    id                 UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    conversation_id    UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+    model              TEXT NOT NULL,
+    effort             TEXT,
+    status             TEXT NOT NULL,  -- ok | error | refusal
+    input_tokens       INT,
+    output_tokens      INT,
+    cache_read_tokens  INT,
+    cache_write_tokens INT,
+    latency_ms         INT,
+    tool_calls         INT NOT NULL DEFAULT 0,
+    error              TEXT,
+    created_at         TIMESTAMPTZ DEFAULT now()
+);
+```
+
 ---
 
 ## 8. REST API Design
@@ -176,8 +215,10 @@ All `/api/*` routes require a valid `session` cookie (JWT). Requests without a v
 | `POST` | `/api/todos` | Creates a todo (`{ title, description?, category?, target_date?, start_date?, end_date?, estimated_effort? }`) |
 | `PATCH` | `/api/todos/{id}` | Updates any writable field on a todo |
 | `DELETE` | `/api/todos/{id}` | Deletes a todo |
+| `GET` | `/api/chat` | The user's rolling conversation, collapsed to display bubbles (`{ conversation_id, configured, messages }`) |
+| `POST` | `/api/chat/messages` | Sends a message; streams the reply as SSE (`text_delta`, `tool_call`, `error`, `done`). `503` if `ANTHROPIC_API_KEY` is unset. |
 
-All responses are JSON. Errors follow `{ "detail": "<message>" }` (FastAPI default).
+All responses are JSON except `/api/chat/messages`, which streams `text/event-stream`. Errors follow `{ "detail": "<message>" }` (FastAPI default).
 
 ---
 

@@ -7,6 +7,7 @@ import { LoginButton } from './components/LoginButton'
 import { AddTodoForm } from './components/AddTodoForm'
 import { TodoList } from './components/TodoList'
 import { TodoModal } from './components/TodoModal'
+import { ChatPanel } from './components/ChatPanel'
 
 // ─── date helpers ────────────────────────────────────────────────────────────
 
@@ -85,6 +86,7 @@ function TodoApp({ user, onLogout }: TodoAppProps) {
   const [categoryFilter, setCategoryFilter] = useState<string | null>(null)
   const [dueFilter, setDueFilter] = useState<'today' | 'week' | null>(null)
   const [showCompleted, setShowCompleted] = useState(false)
+  const [chatOpen, setChatOpen] = useState(false)
 
   const { todos, loading, error, add, update, remove } = useTodos()
 
@@ -246,6 +248,17 @@ function TodoApp({ user, onLogout }: TodoAppProps) {
           onClose={closeModal}
         />
       )}
+
+      {!chatOpen && (
+        <button
+          onClick={() => setChatOpen(true)}
+          className="fixed bottom-6 right-6 z-30 rounded-full bg-indigo-600 px-4 py-3 text-sm font-medium text-white shadow-lg hover:bg-indigo-700 transition-colors"
+          aria-label="Open assistant"
+        >
+          💬 Assistant
+        </button>
+      )}
+      <ChatPanel open={chatOpen} onClose={() => setChatOpen(false)} />
     </div>
   )
 }
