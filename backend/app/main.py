@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from .config import settings
 from . import auth
-from .routers import todos, users
+from .routers import chat, todos, users
 
 app = FastAPI(title="Todo API")
 
@@ -17,6 +17,7 @@ app.add_middleware(
 app.include_router(auth.router)
 app.include_router(todos.router)
 app.include_router(users.router)
+app.include_router(chat.router)
 
 
 @app.get("/api/health")

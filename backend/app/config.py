@@ -11,6 +11,10 @@ class Settings(BaseSettings):
 
     environment: str = "development"  # set to "production" in Cloud Run
 
+    # Todo assistant (Phase B). Empty string disables the /api/chat routes with
+    # a clear 503 rather than a confusing downstream auth error.
+    anthropic_api_key: str = ""
+
     model_config = {"env_file": ".env", "extra": "ignore"}
 
 
