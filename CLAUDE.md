@@ -17,6 +17,14 @@ See `DESIGN.md` for full architecture, data model, API design, and phased implem
 
 ## Local Development
 
+**Quick start (todo assistant testing):** `scripts/dev_up.sh` brings up a local Postgres
+(Docker), migrates it, seeds 25 example tasks, and starts both dev servers — then visit
+`http://localhost:5173/auth/dev-login` for a one-click login, no Google OAuth needed. Never
+touches the production Neon database. `--fresh` wipes and reseeds; Ctrl+C stops everything
+(seed data persists). See the script's header comment for details.
+
+For the manual setup (real OAuth, your own data):
+
 ### Backend
 
 ```bash

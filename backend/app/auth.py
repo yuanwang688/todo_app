@@ -23,6 +23,13 @@ _SCOPES = "openid email profile"
 _JWT_ALGORITHM = "HS256"
 _SESSION_DAYS = 30
 
+# Fixed identity for /auth/dev-login (local testing only — see scripts/dev_up.sh).
+# scripts/seed_local_dev.py seeds tasks against this same google_id so the two
+# always line up.
+DEV_USER_GOOGLE_ID = "local-dev-script-user"
+DEV_USER_EMAIL = "dev@localhost.test"
+DEV_USER_NAME = "Local Dev"
+
 
 def _redirect_uri() -> str:
     return f"{settings.backend_url}/auth/google/callback"
@@ -124,6 +131,28 @@ async def auth_google_callback(
         db.add(user)
     await db.commit()
     await db.refresh(user)
+
+    token = _mint_jwt(str(user.id))
+    response = RedirectResponse(settings.frontend_url, status_code=302)
+    _set_session_cookie(response, token)
+    return response
+
+
+@router.get("/auth/dev-login")
+async def dev_login(db: AsyncSession = Depends(get_db)):
+    """Passwordless login for local testing — skips real Google OAuth entirely
+    and always logs into the same fixed dev account (see scripts/dev_up.sh).
+    404s outside development so this can never be reachable in production."""
+    if settings.environment == "production":
+        raise HTTPException(status_code=404)
+
+    result = await db.execute(select(User).where(User.google_id == DEV_USER_GOOGLE_ID))
+    user = result.scalar_one_or_none()
+    if user is None:
+        user = User(google_id=DEV_USER_GOOGLE_ID, email=DEV_USER_EMAIL, name=DEV_USER_NAME)
+        db.add(user)
+        await db.commit()
+        await db.refresh(user)
 
     token = _mint_jwt(str(user.id))
     response = RedirectResponse(settings.frontend_url, status_code=302)
