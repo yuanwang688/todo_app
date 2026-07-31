@@ -261,8 +261,12 @@ Cloud Run service config:
   - Min instances: 0  (scale to zero)
   - Max instances: 3
   - Memory: 512 MB
-  - Env vars injected from GCP Secret Manager:
-      DATABASE_URL, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, JWT_SECRET
+  - Secrets injected from GCP Secret Manager on every deploy (declared via
+    `--set-secrets` in `.github/workflows/backend.yml`, not a one-off manual
+    binding):
+      DATABASE_URL, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, JWT_SECRET,
+      ANTHROPIC_API_KEY (Phase B todo assistant — optional; the assistant
+      returns 503 "not configured" if unset, everything else still works)
 ```
 
 **Required GCP setup (one-time):**
@@ -586,6 +590,12 @@ gcloud run deploy todo-backend \
   --set-secrets "DATABASE_URL=DATABASE_URL:latest,GOOGLE_CLIENT_ID=GOOGLE_CLIENT_ID:latest,GOOGLE_CLIENT_SECRET=GOOGLE_CLIENT_SECRET:latest,JWT_SECRET=JWT_SECRET:latest" \
   --set-env-vars "ENVIRONMENT=production,FRONTEND_URL=https://todo-app-yw688.web.app,BACKEND_URL=https://todo-app-yw688.web.app"
 ```
+
+This was the one-time bootstrap. The secret list is no longer a manual binding you
+have to remember to redo — every CI deploy now passes `--set-secrets` explicitly
+(see `.github/workflows/backend.yml`), so adding a new secret going forward means
+adding it there, not running `gcloud` by hand. `--set-env-vars` is still one-off
+(unchanged since bootstrap, so no CI step touches it).
 
 ### 14.8 Run Production Migration
 

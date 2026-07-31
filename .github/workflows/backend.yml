@@ -72,7 +72,8 @@ jobs:
           gcloud run deploy todo-backend \
             --image $IMAGE:${{ github.sha }} \
             --region us-central1 \
-            --project todo-app-yw688
+            --project todo-app-yw688 \
+            --set-secrets "DATABASE_URL=DATABASE_URL:latest,GOOGLE_CLIENT_ID=GOOGLE_CLIENT_ID:latest,GOOGLE_CLIENT_SECRET=GOOGLE_CLIENT_SECRET:latest,JWT_SECRET=JWT_SECRET:latest,ANTHROPIC_API_KEY=ANTHROPIC_API_KEY:latest"
 
       - name: Smoke test
         if: github.event_name == 'push'
