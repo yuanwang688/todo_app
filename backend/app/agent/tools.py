@@ -69,8 +69,11 @@ TOOL_SCHEMAS: list[dict] = [
                 "max_effort": {"type": "number", "description": "Only tasks with an estimate <= this many hours."},
                 "limit": {
                     "type": "integer",
-                    "minimum": 1,
-                    "maximum": MAX_SEARCH_LIMIT,
+                    # `minimum`/`maximum` aren't supported on strict tool schemas
+                    # (numerical constraints are a documented JSON-Schema gap for
+                    # structured outputs) — the range is stated here for the model
+                    # and enforced in Python by `execute_tool` regardless of what's
+                    # passed in.
                     "description": f"Max rows to return (default {DEFAULT_SEARCH_LIMIT}, max {MAX_SEARCH_LIMIT}).",
                 },
             },

@@ -21,9 +21,11 @@ import httpx
 import pytest
 from anthropic import APIConnectionError
 from anthropic.types import Message, TextBlock, ToolUseBlock, Usage
+from anthropic.types.parsed_message import ParsedTextBlock
 from sqlalchemy import select
 
 from app.agent import service
+from app.agent.service import _replayable_block
 from app.models import AgentRun, Message as MessageRow, Todo
 
 TODAY = date(2026, 8, 3)
@@ -137,6 +139,48 @@ async def seed_todo(db, user, **kw):
     await db.commit()
     await db.refresh(t)
     return t
+
+
+# ── replayable-block serialization ──────────────────────────────────────────
+# Regression coverage for a bug only a real API call surfaced: client.messages
+# .stream() returns Parsed* convenience subclasses carrying extra response-only
+# fields (e.g. `parsed_output`) that the API rejects if echoed back as request
+# content on a later turn ("Extra inputs are not permitted"). These tests use
+# the actual SDK type responsible, not a hand-rolled stand-in, so a future SDK
+# upgrade that changes its fields would still be caught here.
+
+
+def test_replayable_block_strips_parsed_output_from_text_blocks():
+    block = ParsedTextBlock(type="text", text="hello", citations=None, parsed_output=None)
+    assert _replayable_block(block) == {"type": "text", "text": "hello"}
+
+
+def test_replayable_block_strips_caller_from_tool_use_blocks():
+    block = ToolUseBlock(type="tool_use", id="toolu_1", name="search_todos", input={"limit": 5})
+    assert _replayable_block(block) == {
+        "type": "tool_use", "id": "toolu_1", "name": "search_todos", "input": {"limit": 5},
+    }
+
+
+async def test_second_turn_with_real_block_types_does_not_reintroduce_parsed_output(db, user, conversation, monkeypatch):
+    """Turn 1's assistant content must be persisted in a form turn 2 can
+    replay — this is the exact shape that 400'd against the real API before
+    `_replayable_block` existed."""
+    parsed_reply = Message(
+        id="msg_1", model="claude-opus-5", role="assistant", type="message",
+        content=[ParsedTextBlock(type="text", text="All clear.", citations=None, parsed_output=None)],
+        stop_reason="end_turn", stop_sequence=None, usage=usage(),
+    )
+    install_fake_client(monkeypatch, [parsed_reply, text_message("Still clear.")])
+
+    await service.run_turn(db=db, user_id=user.id, conversation_id=conversation.id,
+                            message="first", today=TODAY, preferences=PREFS)
+    result = await service.run_turn(db=db, user_id=user.id, conversation_id=conversation.id,
+                                     message="second", today=TODAY, preferences=PREFS)
+
+    assert result.error is None
+    rows = (await db.execute(select(MessageRow).where(MessageRow.conversation_id == conversation.id))).scalars().all()
+    assert "parsed_output" not in rows[1].content[0]
 
 
 # ── the direct-answer path ──────────────────────────────────────────────────

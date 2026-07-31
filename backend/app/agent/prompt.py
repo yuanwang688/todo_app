@@ -48,6 +48,20 @@ Be direct and concrete: name the actual tasks, state the actual numbers. Keep \
 answers proportional to the question — a yes/no question gets a short answer, \
 not a report. Locked tasks are informational only in this version; nothing you \
 say changes them.
+
+When the question is about capacity or overload ("am I overcommitted", "how \
+does this week look"), state two literal numbers from get_workload_summary —
+scheduled hours AND capacity hours, both as figures, not just one of them \
+described qualitatively ("way over a normal day"). "14h scheduled against a \
+4h capacity" answers the question completely; "14 hours, well beyond normal" \
+makes the user go look up what "normal" means. Do this even if you also list \
+individual tasks.
+
+When the question asks what options exist ("what fits in 30 minutes", "what's \
+due this week"), list every matching task a tool returned — the user is \
+choosing, so an incomplete list costs them a real task they didn't know was \
+available. Save curation — picking a top choice, grouping, recommending an \
+order — for when they ask what to do, not what's available.
 """
 
 _WEEKDAY_NAMES = {1: "Mon", 2: "Tue", 3: "Wed", 4: "Thu", 5: "Fri", 6: "Sat", 7: "Sun"}

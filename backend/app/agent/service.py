@@ -19,6 +19,16 @@ Design notes that matter if you're changing this file:
 - **No mutation tool exists yet.** `propose_changes` is Phase C. Until then
   `AgentTurnResult.proposal` is always `None` — there is nothing to validate
   because the model has no way to write.
+- **Persisted content blocks are rebuilt field-by-field, never
+  `block.model_dump(mode="json")` wholesale.** `client.messages.stream()`
+  returns `Parsed*` convenience subclasses (e.g. `ParsedTextBlock`) that carry
+  extra response-only fields like `parsed_output`. Dumping one of those into
+  the DB and replaying it as request content on a later turn gets a 400
+  ("Extra inputs are not permitted") — found by running a real two-turn
+  conversation against the API, not by anything in the mocked test suite
+  (which built plain `TextBlock`/`ToolUseBlock` instances that don't have this
+  problem). `_replayable_block` is the fix: keep only the fields each block
+  type's *request* schema accepts.
 """
 from __future__ import annotations
 
@@ -128,6 +138,27 @@ async def _log_run(db: AsyncSession, conversation_id: uuid.UUID, result: AgentTu
 # ── the loop ─────────────────────────────────────────────────────────────────
 
 
+def _replayable_block(block: Any) -> dict[str, Any]:
+    """Reduce one response content block to the fields its *request*-side
+    counterpart accepts. See the module docstring — this exists because the
+    SDK's response objects carry extra fields the API rejects on the way back
+    in."""
+    if block.type == "text":
+        return {"type": "text", "text": block.text}
+    if block.type == "tool_use":
+        return {"type": "tool_use", "id": block.id, "name": block.name, "input": block.input}
+    if block.type == "thinking":
+        # Must be replayed byte-for-byte, signature included — the API
+        # rejects a modified thinking block. No extra fields to strip here,
+        # but keep the explicit allowlist rather than a wholesale dump.
+        return {"type": "thinking", "thinking": block.thinking, "signature": block.signature}
+    if block.type == "redacted_thinking":
+        return {"type": "redacted_thinking", "data": block.data}
+    # Not expected with this tool set (no server tools, no citations-enabled
+    # documents) — fall back to a full dump rather than silently drop content.
+    return block.model_dump(mode="json")
+
+
 async def _run_loop(
     *,
     client: anthropic.AsyncAnthropic,
@@ -190,7 +221,7 @@ async def _run_loop(
             reply_text = "I'm not able to help with that request."
             break
 
-        assistant_content_json = [block.model_dump(mode="json") for block in response.content]
+        assistant_content_json = [_replayable_block(block) for block in response.content]
         messages.append({"role": "assistant", "content": response.content})
         persistable.append({"role": "assistant", "content": assistant_content_json})
 

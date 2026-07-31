@@ -346,7 +346,7 @@ Each phase ends with a working, testable slice. Estimated effort assumes evening
 - ✅ **Done:** `pytest evals` reports 10 failures, all `agent not implemented`; `pytest` reports
   85 passing unit tests; both fields verified end to end in a browser.
 
-### Phase B — Read-only assistant · **code complete, pending a real API key**
+### Phase B — Read-only assistant · **complete, verified against the real model**
 - Migration 005 (conversations, messages, agent_runs) — shipped, verified up/down on Postgres 16.
 - `app/agent/` package: `prompt.py` (frozen system prompt + cached preferences block),
   `tools.py` (`search_todos` / `get_todo_details` / `get_workload_summary`, all deterministic
@@ -360,18 +360,41 @@ Each phase ends with a working, testable slice. Estimated effort assumes evening
   `GET /api/chat` returns the rolling conversation collapsed into display bubbles.
   `ChatPanel` (slide-in drawer + floating toggle) renders both, with tool-call chips.
 - `evals/agent_adapter.run_agent` now calls the real service — no second code path.
-- **Known gap, deferred:** no `ANTHROPIC_API_KEY` was available in the build environment.
-  `pytest evals` correctly reports "not configured" for all 10 scenarios rather than
-  silently passing. In its place: `tests/test_agent_service.py` (14 tests) drives the loop
-  against a fake client built from real SDK response types — proves history, tool execution,
-  persistence, usage accounting, and refusal/error handling are wired correctly. Separately,
-  the full stack was browser-driven with a syntactically-valid-but-wrong key: the request
-  reached `api.anthropic.com`, got a real 401, and the error surfaced as a clean chat bubble
-  with nothing corrupted in the DB (`agent_runs.status='error'`, zero `messages` rows). What's
-  *not* yet proven: that the model picks the right tool and gives a correct answer for a real
-  question — that needs a working key.
-- ⏳ **Done when a key is added:** run `pytest evals`, confirm scenarios 1, 2, 8, 10 pass;
-  browser-verify a real Q&A turn; confirm `cache_read_input_tokens > 0` on the second turn.
+
+**Bugs a real key found that mocks couldn't:**
+1. `search_todos`'s `limit` field used `minimum`/`maximum` in its JSON Schema — the API rejects
+   numerical constraints on strict tool schemas ($0 cost, failed before any tokens were billed).
+2. Second-turn conversations 400'd with `"Extra inputs are not permitted"`. `client.messages.stream()`
+   returns `Parsed*` convenience subclasses (`ParsedTextBlock`, etc.) carrying response-only fields
+   like `parsed_output`; dumping one wholesale into the DB and replaying it as request content on a
+   later turn sends a field the request schema doesn't accept. Fixed with `_replayable_block()`, an
+   explicit per-type allowlist instead of `model_dump(mode="json")`. The mocked test suite used plain
+   `TextBlock`/`ToolUseBlock` and never had this field, so it couldn't have caught this — now covered
+   by a regression test built from the actual `ParsedTextBlock` type.
+
+**Two prompt refinements, each made after a real observed failure and re-verified 4–5× for
+stability before accepting:**
+1. "What fits in 30 minutes" initially curated to a top pick instead of listing every match — a
+   reasonable reading of the original "keep answers proportional" style guidance, but wrong for an
+   options question where an omitted task is a real cost to the user. Added an explicit
+   options-vs-recommendation distinction.
+2. `overload-detection` intermittently reported the per-task breakdown without restating the
+   aggregate (scheduled hours vs. capacity) as literal numbers. Tightened the style guidance to name
+   both figures explicitly, not "the numbers" generically.
+
+**Verified against `claude-opus-5`, live:**
+- `pytest evals`: scenarios 1, 2, 8, 10 pass (the Phase B exit criterion), plus 7 (dedupe-restraint)
+  as a bonus. The remaining 5 failures are exactly and only the Phase C scenarios that need
+  `propose_changes` — `has_proposal`/`schema_valid` correctly report no proposal was produced,
+  because no mutation tool exists yet. No unexplained failures.
+- A real 3-turn conversation: `cache_read_tokens` > 0 on every turn including the first (the
+  frozen system+tools prefix was already warm from earlier calls), confirming caching works both
+  within and across conversations.
+- Browser-driven end-to-end with the real key: asked "What's overdue?" through the actual UI,
+  got a correct streamed answer with tool-call chips.
+- **Session cost:** roughly 100+ real model turns across iteration, debugging, and stability
+  checks — a rough estimate is single-digit dollars given heavy cache-read pricing, but check the
+  Anthropic console for the exact figure.
 
 ### Phase C — Proposals, approval, undo · ~4 sessions
 - Migration 006 (proposals, proposal_items, todo_revisions).
