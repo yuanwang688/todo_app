@@ -12,6 +12,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **CI/CD:** GitHub Actions
 
 See `DESIGN.md` for full architecture, data model, API design, and phased implementation plan.
+See `DIRECTORY_STRUCTURE.md` for a file-by-file tour of the repo.
 
 **Keep `DESIGN.md` in sync with the code.** Any time behaviour changes — new fields, modified API endpoints, auth flow changes, new UI views — update the relevant section of `DESIGN.md` in the same commit.
 
@@ -63,28 +64,5 @@ If neither test suite exists yet, say so explicitly rather than claiming success
 
 ## Project Structure
 
-```
-backend/
-  app/
-    main.py        # FastAPI app entry point, router registration, CORS
-    auth.py        # OAuth flow, JWT issue/verify, session cookie (Phase 3)
-    models.py      # SQLAlchemy ORM models (Phase 2)
-    schemas.py     # Pydantic request/response schemas (Phase 2)
-    database.py    # Async engine + session factory (Phase 2)
-    routers/
-      todos.py     # CRUD endpoints (Phase 2)
-      users.py     # /api/me (Phase 3)
-  alembic/         # DB migrations (Phase 2)
-  Dockerfile
-  requirements.txt
-
-frontend/
-  src/
-    api/           # Typed fetch wrappers per endpoint (Phase 2)
-    components/    # TodoItem, TodoList, AddTodoForm, etc. (Phase 2)
-    hooks/         # useAuth, useTodos (Phase 2+)
-    App.tsx
-    main.tsx
-  vite.config.ts   # Proxy config
-  tailwind.config.js
-```
+See `DIRECTORY_STRUCTURE.md` for the full, file-by-file tour — keep it in sync the same way
+as `DESIGN.md` when files move or new top-level pieces (routers, agent tools, evals) appear.

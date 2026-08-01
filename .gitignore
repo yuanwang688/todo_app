@@ -3,6 +3,9 @@ __pycache__/
 *.pyc
 .DS_Store
 
+# Personal scratch notes — has held real secrets before, never commit it
+scratch
+
 # GCP SDK (installed locally during setup)
 backend/google-cloud-sdk/
 backend/google-cloud-cli-linux-x86_64.tar.gz
