@@ -35,5 +35,5 @@ export function useTodos() {
     setTodos((prev) => prev.filter((t) => t.id !== id))
   }
 
-  return { todos, loading, error, add, update, remove }
+  return { todos, loading, error, add, update, remove, reload: load }
 }

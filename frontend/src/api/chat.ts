@@ -1,3 +1,5 @@
+import { Proposal } from './proposals'
+
 export interface ChatHistoryItem {
   role: 'user' | 'assistant'
   text: string
@@ -8,11 +10,13 @@ export interface ChatHistory {
   conversation_id: string
   configured: boolean
   messages: ChatHistoryItem[]
+  pending_proposals: Proposal[]
 }
 
 export type ChatStreamEvent =
   | { type: 'text_delta'; text: string }
   | { type: 'tool_call'; name: string }
+  | { type: 'proposal_ready'; proposal_id: string; summary: string; item_count: number }
   | { type: 'error'; message: string }
   | { type: 'done'; reply_text: string; tool_calls: string[]; refusal: boolean; error: string | null }
 

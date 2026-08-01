@@ -11,17 +11,19 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..agent import service
 from ..auth import get_current_user
 from ..database import get_db
-from ..models import Message, User
+from ..models import Message, Proposal, User
+from .proposals import PROPOSAL_EXPIRY_HOURS, ProposalOut, _to_proposal_out
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 
@@ -53,6 +55,7 @@ class ChatHistoryOut(BaseModel):
     conversation_id: str
     configured: bool
     messages: list[ChatHistoryItem]
+    pending_proposals: list[ProposalOut] = []
 
 
 def _strip_date_prefix(text: str) -> str:
@@ -91,6 +94,22 @@ def _summarize_history(rows: list[Message]) -> list[ChatHistoryItem]:
     return items
 
 
+async def _pending_proposals(db: AsyncSession, conversation_id) -> list[ProposalOut]:
+    """Proposals awaiting the user's review, for reload scenarios where the
+    live SSE `proposal_ready` event was never seen. Filters out anything
+    old enough that /api/proposals would lazily expire it on interaction —
+    that write happens there, not here, so this stays read-only."""
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=PROPOSAL_EXPIRY_HOURS)
+    result = await db.execute(
+        select(Proposal)
+        .where(Proposal.conversation_id == conversation_id, Proposal.status == "pending")
+        .order_by(Proposal.created_at)
+    )
+    proposals = list(result.scalars().all())
+    fresh = [p for p in proposals if (p.created_at if p.created_at.tzinfo else p.created_at.replace(tzinfo=timezone.utc)) >= cutoff]
+    return [await _to_proposal_out(db, p) for p in fresh]
+
+
 @router.get("", response_model=ChatHistoryOut)
 async def get_chat(
     db: AsyncSession = Depends(get_db),
@@ -102,6 +121,7 @@ async def get_chat(
         conversation_id=str(convo.id),
         configured=service.is_configured(),
         messages=_summarize_history(convo.messages),
+        pending_proposals=await _pending_proposals(db, convo.id),
     )
 
 

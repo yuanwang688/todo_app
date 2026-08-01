@@ -171,14 +171,19 @@ CREATE TABLE conversations (
 );
 
 -- content stores raw Anthropic content blocks verbatim, so a conversation
--- replays to the API unchanged across HTTP calls
+-- replays to the API unchanged across HTTP calls. `seq` is app-managed
+-- insertion order (Phase C, migration 007) — every message in one turn is
+-- persisted in a single transaction and so shares one `created_at` (Postgres's
+-- now() is transaction-start time), which has no tiebreaker on its own.
 CREATE TABLE messages (
     id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     conversation_id  UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
     role             TEXT NOT NULL,   -- user | assistant
     content          JSONB NOT NULL,
+    seq              INT NOT NULL,
     created_at       TIMESTAMPTZ DEFAULT now()
 );
+CREATE INDEX ON messages(conversation_id, seq);
 
 -- cost/latency/cache audit log — one row per assistant turn (which may call
 -- the model several times across a tool loop; usage is summed)
@@ -197,6 +202,52 @@ CREATE TABLE agent_runs (
     error              TEXT,
     created_at         TIMESTAMPTZ DEFAULT now()
 );
+
+-- Phase C: propose/approve/undo. `proposals.conversation_id` (not `run_id`)
+-- because the AgentRun row for a turn doesn't exist until the turn finishes,
+-- but propose_changes persists mid-turn.
+CREATE TABLE proposals (
+    id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    conversation_id  UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+    user_id          UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    summary          TEXT NOT NULL,
+    status           TEXT NOT NULL DEFAULT 'pending',  -- pending|applied|rejected|expired|undone
+    created_at       TIMESTAMPTZ DEFAULT now(),
+    applied_at       TIMESTAMPTZ
+);
+
+-- `changes` is {field: {from, to}} for update, {field: value} for create, {}
+-- for delete. `todo_id` is ON DELETE SET NULL (not CASCADE) — deleting the
+-- target (via an applied delete, or a plain GUI delete) shouldn't destroy
+-- this audit row, just its live reference; `todo_revisions.proposal_item_id`
+-- below is what survives that and lets a deleted item's title/todo still be
+-- resolved (see AI_ASSISTANT_PLAN.md Phase C bug #2).
+CREATE TABLE proposal_items (
+    id                 UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    proposal_id        UUID NOT NULL REFERENCES proposals(id) ON DELETE CASCADE,
+    op                 TEXT NOT NULL,  -- create | update | delete
+    todo_id            UUID REFERENCES todos(id) ON DELETE SET NULL,
+    changes            JSONB NOT NULL,
+    rationale          TEXT NOT NULL,
+    quadrant           TEXT,
+    seen_updated_at    TIMESTAMPTZ,    -- for staleness detection at apply time
+    status             TEXT NOT NULL DEFAULT 'pending'  -- pending|applied|skipped|stale|invalid|undone
+);
+
+-- Audit trail for every todo mutation, agent- or user-driven. `todo_id` has
+-- no FK at all, by design — a revision must survive the row it describes
+-- being deleted, since undo needs it to recreate that row.
+CREATE TABLE todo_revisions (
+    id                 UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    todo_id            UUID NOT NULL,
+    user_id            UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    before             JSONB,   -- NULL when this row records a create
+    after              JSONB,   -- NULL when this row records a delete
+    source             TEXT NOT NULL,  -- user | agent
+    proposal_item_id   UUID REFERENCES proposal_items(id) ON DELETE SET NULL,
+    created_at         TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX ON todo_revisions(todo_id);
 ```
 
 ---
@@ -215,8 +266,12 @@ All `/api/*` routes require a valid `session` cookie (JWT). Requests without a v
 | `POST` | `/api/todos` | Creates a todo (`{ title, description?, category?, target_date?, start_date?, end_date?, estimated_effort? }`) |
 | `PATCH` | `/api/todos/{id}` | Updates any writable field on a todo |
 | `DELETE` | `/api/todos/{id}` | Deletes a todo |
-| `GET` | `/api/chat` | The user's rolling conversation, collapsed to display bubbles (`{ conversation_id, configured, messages }`) |
-| `POST` | `/api/chat/messages` | Sends a message; streams the reply as SSE (`text_delta`, `tool_call`, `error`, `done`). `503` if `ANTHROPIC_API_KEY` is unset. |
+| `GET` | `/api/chat` | The user's rolling conversation, collapsed to display bubbles (`{ conversation_id, configured, messages, pending_proposals }`) |
+| `POST` | `/api/chat/messages` | Sends a message; streams the reply as SSE (`text_delta`, `tool_call`, `proposal_ready`, `error`, `done`). `503` if `ANTHROPIC_API_KEY` is unset. |
+| `GET` | `/api/proposals/{id}` | Fetch a proposal + its items. `404` if not the caller's; a `pending` proposal older than 24h flips to `expired` on read. |
+| `POST` | `/api/proposals/{id}/apply` | Body `{ item_ids: [...] }`. All-or-nothing on the selected set — validates every item (locked / writable-field whitelist / staleness) before any write; one blocked item blocks the whole batch and the proposal stays `pending`. `409` if not pending. |
+| `POST` | `/api/proposals/{id}/reject` | Marks the proposal `rejected`; no todo is touched. `409` if not pending. |
+| `POST` | `/api/proposals/{id}/undo` | Best-effort per item: walks `todo_revisions` newest-first and restores `before`, writing compensating revisions. `409` if not `applied`. |
 
 All responses are JSON except `/api/chat/messages`, which streams `text/event-stream`. Errors follow `{ "detail": "<message>" }` (FastAPI default).
 

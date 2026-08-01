@@ -396,13 +396,89 @@ stability before accepting:**
   checks — a rough estimate is single-digit dollars given heavy cache-read pricing, but check the
   Anthropic console for the exact figure.
 
-### Phase C — Proposals, approval, undo · ~4 sessions
-- Migration 006 (proposals, proposal_items, todo_revisions).
-- `propose_changes` tool + validation layer (whitelist, locked, concurrency).
-- Apply / reject / undo endpoints, transactional with per-item statuses.
-- Revision writes wired into the *existing* GUI mutation paths too.
-- `ProposalCard` / `ChangeRow` UI with selective approval and undo.
-- ✅ **Done when:** scenarios 3–7, 9 pass; browser-verified: propose → deselect 2 → apply → verify list → undo → verify list; stale-item path verified by editing a task in a second tab mid-proposal.
+### Phase C — Proposals, approval, undo · **complete, verified against the real model**
+- Migration 006 (proposals, proposal_items, todo_revisions) + migration 007 (see bugs below).
+- `propose_changes` tool (`app/agent/propose.py`) + two-layer validation: loose JSON Schema (no
+  `minLength`/`minItems` — strict tool schemas reject those, per the Phase B lesson) plus
+  `agent_schemas.Proposal` for everything the schema can't express. A third, DB-backed check
+  rejects a proposal touching a locked task **in full**, not partially — a locked task never
+  appears even transiently in a persisted proposal.
+- `POST /api/proposals/{id}/apply|reject|undo`, `GET /api/proposals/{id}` (`app/routers/proposals.py`).
+  Apply is all-or-nothing on the *selected* set: every item is validated (locked / whitelist /
+  stale via `seen_updated_at` vs. the live `updated_at`) before anything writes; one blocked item
+  blocks the whole batch and the proposal stays `pending` so the caller can deselect and retry.
+  Undo is best-effort per item (a recovery path, not a transaction the user is choosing pieces
+  of) — it walks `todo_revisions` newest-first and writes compensating revisions, so undo is
+  itself audited.
+- `todo_revisions` writes added to the *existing* GUI mutation paths too (`routers/todos.py`,
+  `source='user'`), sharing a `snapshot_todo`/`deserialize_snapshot` helper (`app/revisions.py`)
+  with the proposal apply/undo paths so both audit trails stay the same shape.
+- `GET /api/chat` gained `pending_proposals` (proposals still `pending` and not yet 24h-expired)
+  so a page reload doesn't lose visibility into an unactioned proposal from a missed SSE event.
+  **Deliberately not extended to `applied` proposals** — undo becomes unreachable after a reload,
+  which is an accepted gap for this phase (see Known limitations below), not an oversight.
+- `ProposalCard` / `ChangeRow` (`frontend/src/components/`) — per-item checkboxes (all pending
+  items selected by default), diff rendering (`field: from → to` for updates, plain values for
+  creates, a plain notice for deletes), quadrant and status badges, Apply/Reject/Undo actions.
+  Blocked-apply responses deselect the blockers and annotate them inline (`⚠ Stale — …`) without
+  needing a follow-up fetch, since a blocked apply commits nothing server-side to re-fetch.
+- ✅ **Done:** scenarios 3–7, 9 pass (plus 1, 2, 10 continuing to pass; 8 remains the pre-existing
+  Phase B intermittent flake — 2/3 pass rate live, unrelated to anything in this phase, see Known
+  limitations). Browser-verified end to end: propose (5-item week-clearing batch) → deselected 2
+  → applied 3 → todo list reflected the 3 date changes, the 2 deselected items untouched → undo →
+  todo list reverted exactly. Stale-item path verified by editing the proposal's target task in a
+  second tab before applying — the item was auto-deselected with an inline stale warning and the
+  apply was blocked as designed.
+
+**Four real bugs found only by testing against the actual Postgres backend** (the mocked/SQLite
+test suite passed throughout — SQLite is lenient in ways Postgres/asyncpg is not, see below):
+1. **Applying a date-field update or create crashed with a 500.** `propose_changes`'s raw tool-call
+   input carries date fields as ISO strings (`"2026-08-12"`); `apply_proposal` was doing
+   `setattr(todo, field, value)` straight from that string. SQLite's `Date` type silently accepts
+   and round-trips a string, so every SQLite-backed test passed; asyncpg rejects a non-`date`
+   value outright (`'str' object has no attribute 'toordinal'`). This would have broken *every*
+   real reschedule proposal in production. Fixed with `revisions.deserialize_field()`, applied to
+   both the `update` and `create` branches, with unit tests asserting the actual return type
+   (`isinstance(value, date)`) so a regression can't hide behind SQLite's leniency again.
+2. **An applied deletion showed "Unknown task" in the UI.** `todo_title` was looked up live from
+   `todos`, which no longer has the row. Root cause was deeper than a missing fallback, though:
+   `proposal_items.todo_id` itself gets nulled by its `ON DELETE SET NULL` the instant the target
+   row is deleted, so a fallback keyed on `todo_id` never even ran. Fixed by keying the
+   `todo_revisions` fallback lookup on `proposal_item_id` (which survives) instead of `todo_id`
+   (which doesn't) — and undo's delete-recreation branch now re-links `item.todo_id` once the row
+   exists again, for the same reason.
+3. **Conversation replay could feed the model a `tool_result` before its `tool_use`**, which the
+   Messages API rejects with a 400 — and once persisted, every future turn in that conversation
+   failed identically (not transient). Root cause: `_persist_new_messages` inserts a whole turn's
+   messages in one transaction, and Postgres's `now()` returns *transaction start time*, so every
+   message in a turn shared one `created_at`; `_load_history`'s `ORDER BY created_at` had no
+   tiebreaker for those ties, and Postgres doesn't guarantee tied rows replay in insertion order.
+   Fixed with migration 007: an app-managed `messages.seq` column (not a DB identity/serial column
+   — those don't auto-populate on a non-PK column under SQLite, which the test suite runs on),
+   allocated in `_persist_new_messages` in the same order the turn's messages are already in.
+   Existing rows were backfilled by physical row order (`ctid`), which reconstructs true insertion
+   order for these append-only rows even for conversations the bug had already corrupted —
+   verified by re-dumping a corrupted local conversation post-migration and confirming every
+   `tool_use`/`tool_result` pair was back in causal order.
+4. **The eval harness's own `apply_in_memory` projector** (`evals/graders.py`, used by the
+   `workload_decreases`/`no_day_over_capacity` graders) had the same class of bug as #1 — merging
+   a proposal's raw string dates onto a snapshot dict of real `date` objects, corrupting the dict's
+   types and crashing `app.triage`'s date comparisons. This is what `preserve-locked-tasks` was
+   hitting before the fix. Not a production bug (evals never call the apply endpoint), but it
+   blocked exactly the scenario this phase needed passing, so fixed the same way (`_coerce_dates`).
+
+**Known limitations, deliberately deferred rather than silently accepted:**
+- **Undo is unreachable after a page reload.** `pending_proposals` on `GET /api/chat` only
+  surfaces `pending` proposals; an `applied` proposal's Undo button exists only for the life of
+  the ChatPanel session that applied it. Fixing this means deciding how long an applied proposal
+  stays undo-eligible and surfacing that state on reload — deferred as a UX scope decision, not
+  attempted mid-phase.
+- **Soft delete was raised and deliberately deferred.** Hard delete + the `todo_revisions` audit
+  trail already gives full recreate-on-undo capability (proven above), and already shipped/tested;
+  switching to a `deleted_at` column would mean re-touching every `Todo` query in the app
+  (`todos.py`, all three read tools, workload calc) for a real but non-blocking benefit (it would
+  have sidestepped bug #2's `ON DELETE SET NULL` complexity). Worth a follow-up phase, not a
+  Phase C amendment.
 
 ### Phase D — Planning simulation · ~2 sessions
 - `user_planning_preferences` table + settings UI.
