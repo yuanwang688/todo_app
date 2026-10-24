@@ -34,6 +34,8 @@ from ..agent_schemas import Proposal as ProposalContract
 from ..models import Proposal as ProposalRow, ProposalItem as ProposalItemRow, Todo
 from ..triage import AGENT_WRITABLE_FIELDS
 
+_NULLABLE_DATE: dict = {"anyOf": [{"type": "string", "format": "date"}, {"type": "null"}]}
+
 PROPOSE_CHANGES_SCHEMA: dict = {
     "name": "propose_changes",
     "description": (
@@ -67,7 +69,8 @@ PROPOSE_CHANGES_SCHEMA: dict = {
                             "description": (
                                 "update: only category, target_date, start_date, end_date, "
                                 "estimated_effort, importance, is_focus — omit fields you're not "
-                                "changing, don't set them to their current value. create: also "
+                                "changing, don't set them to their current value. A date set to "
+                                "null clears it. create: also "
                                 "requires title; description is optional. Never completed. "
                                 "Empty object for delete."
                             ),
@@ -75,9 +78,13 @@ PROPOSE_CHANGES_SCHEMA: dict = {
                                 "title": {"type": "string"},
                                 "description": {"type": "string"},
                                 "category": {"type": "string"},
-                                "target_date": {"type": "string", "format": "date"},
-                                "start_date": {"type": "string", "format": "date"},
-                                "end_date": {"type": "string", "format": "date"},
+                                # Nullable so a date can be *cleared* — spreading a
+                                # task over a start/end range means removing its
+                                # target_date, which otherwise pins the whole
+                                # estimate to that one day (see triage.occupies_day).
+                                "target_date": _NULLABLE_DATE,
+                                "start_date": _NULLABLE_DATE,
+                                "end_date": _NULLABLE_DATE,
                                 "estimated_effort": {"type": "number"},
                                 "importance": {"type": "integer", "description": "1 low, 2 medium, 3 high."},
                                 "is_focus": {"type": "boolean"},

@@ -53,6 +53,74 @@ def test_overloaded_week_has_exactly_fourteen_hours_today():
     assert today_hours == 14.0, "scenario 08 asserts the assistant states 14.0"
 
 
+def _rebalance_snapshot() -> dict[str, dict]:
+    return {
+        str(i): {**{f: None for f in SNAPSHOT_FIELDS}, **row}
+        for i, row in enumerate(fixtures.rebalance_week())
+    }
+
+
+def test_rebalance_week_numbers():
+    from app import triage
+    from evals.graders import _Task
+
+    tasks = [_Task(t) for t in _rebalance_snapshot().values()]
+    start, end = triage.week_bounds(TODAY)
+    days = triage.workload(tasks, start, end)
+    assert days[0].scheduled_hours == 11.5, "scenario 11 asserts the assistant states 11.5"
+    assert triage.total_scheduled_hours(tasks, start, end) == 18.5, "scenario 11 asserts 18.5"
+    assert sum(d.capacity_hours for d in days) == 20.0, "scenario 11 asserts 20.0"
+    assert [d.day.isoweekday() for d in days if d.is_overloaded] == [1], "only Monday is over"
+    assert len([r for r in fixtures.rebalance_week() if r["locked"]]) == 2
+
+
+def _rebalance_ctx(*items) -> GradeContext:
+    return GradeContext(
+        scenario_id="synthetic",
+        result=AgentResult(reply_text="", proposal=proposal(*items)),
+        before=_rebalance_snapshot(),
+        after=_rebalance_snapshot(),
+        today=TODAY,
+        preferences={"daily_capacity_hours": 4.0, "workdays": [1, 2, 3, 4, 5]},
+    )
+
+
+def test_rebalance_week_has_a_valid_solution():
+    """Scenario 12 must be solvable — pin one known-good rebalance: spread the
+    migration over Mon–Tue, tests to Thursday, the two Q3 tasks to next week."""
+    ctx = _rebalance_ctx(
+        item(todo_id="0", changes={"target_date": None, "start_date": "2026-08-03", "end_date": "2026-08-04"}),
+        item(todo_id="1", changes={"target_date": "2026-08-06"}),
+        item(todo_id="2", changes={"target_date": "2026-08-10"}),
+        item(todo_id="3", changes={"target_date": "2026-08-11"}),
+    )
+    for range_ in ("this_week", "two_weeks"):
+        assert graded({"type": "no_day_over_capacity", "range": range_}, ctx).passed
+    assert graded({"type": "no_dates_before_today"}, ctx).passed
+
+
+def test_two_weeks_range_catches_dumping_on_next_monday():
+    everything_to_next_monday = [
+        item(todo_id=str(i), changes={"target_date": "2026-08-10"}) for i in range(4)
+    ]
+    ctx = _rebalance_ctx(*everything_to_next_monday)
+    assert graded({"type": "no_day_over_capacity", "range": "this_week"}, ctx).passed
+    assert not graded({"type": "no_day_over_capacity", "range": "two_weeks"}, ctx).passed
+
+
+def test_no_day_over_capacity_respects_workdays():
+    """Moving work to Saturday must count as an overload under a Mon–Fri week."""
+    ctx = _rebalance_ctx(item(todo_id="2", changes={"target_date": "2026-08-08"}))
+    result = graded({"type": "no_day_over_capacity", "range": "this_week"}, ctx)
+    assert not result.passed and "2026-08-08" in result.message
+
+
+def test_no_dates_before_today():
+    ctx = _rebalance_ctx(item(todo_id="2", changes={"target_date": "2026-07-31"}))
+    result = graded({"type": "no_dates_before_today"}, ctx)
+    assert not result.passed and "Update the API docs" in result.message
+
+
 def test_duplicates_has_one_genuine_pair():
     titles = [r["title"] for r in fixtures.duplicates()]
     dupes = {t for t in titles if titles.count(t) > 1}
@@ -61,7 +129,7 @@ def test_duplicates_has_one_genuine_pair():
 
 def test_every_scenario_loads_and_names_a_real_fixture():
     scenarios = load_scenarios()
-    assert len(scenarios) == 10
+    assert len(scenarios) == 13
     for s in scenarios:
         assert s.fixture in fixtures.FIXTURES, f"{s.id} names unknown fixture {s.fixture}"
         assert s.asserts, f"{s.id} has no assertions"

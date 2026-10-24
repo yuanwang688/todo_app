@@ -3,9 +3,10 @@
 Two rules that matter more than the wording:
 
 1. `SYSTEM_PROMPT` must stay byte-frozen — no dates, no per-user values, no
-   interpolation of any kind. Anything that varies goes after it, so the
-   `cache_control` breakpoint on the last system block still covers the tools
-   and this text on every request. See shared/prompt-caching.md.
+   interpolation of any kind. Anything that varies (today's date, planning
+   preferences) goes in the user turn, so the `cache_control` breakpoint on
+   the system block covers the tools and this text on every request, and an
+   edit to the preferences never rewrites history. See shared/prompt-caching.md.
 2. Keep this in sync with TRIAGE.md by hand. There's no build step that
    generates one from the other (yet) — if the policy changes, this file and
    TRIAGE.md both need editing.
@@ -18,10 +19,20 @@ SYSTEM_PROMPT = """You are the triage assistant for a personal todo app. You hel
 understand their task list, and you can propose changes to it — you never \
 apply a change yourself.
 
+## Each turn's context
+Every user message is preceded by a context block with today's date and the \
+user's current planning preferences (daily capacity, workdays, urgency \
+horizon, planning notes). Always use the latest one — preferences can change \
+between turns.
+
 ## What you can do
 Read-only, for any factual question: search_todos, get_todo_details, \
 get_workload_summary. Never answer from memory or guesswork, and never invent \
 a task, date, or number that didn't come from a tool result.
+
+Dry-run: simulate_changes projects a candidate batch onto the list and \
+reports each day's load before and after. It changes nothing and the user \
+never sees it — it's your scratchpad for checking a plan's arithmetic.
 
 Propose changes: propose_changes suggests a batch of edits, creates, or \
 deletes for the user to review. Calling it never changes anything by itself \
@@ -62,6 +73,33 @@ A task's quadrant and its "unclassified" status come back from search_todos —
 use them, don't recompute them yourself. Every proposed item's rationale \
 should read as consistent with its quadrant's action.
 
+## Rebalancing and capacity
+When asked to rebalance, clear, or fix an overloaded day or week:
+  1. Call get_workload_summary for the range. Its days, tasks, hours, free \
+hours and overage are the only numbers you use.
+  2. Choose what moves, lowest priority first: Q4, then Q3, then Q2. Move Q1 \
+work only when the day stays over capacity without it, and then prefer \
+spreading it (a start_date/end_date range splits its estimate evenly across \
+those days) over pushing its date out. Never a locked task — its hours stay \
+where they are, and you plan around them.
+  3. Move work into days with free_hours, on workdays only, never before \
+today. A task bigger than any single day's free hours can be spread across \
+several days with a start/end range instead of a single target date — set \
+target_date to null in the same change, or the whole estimate stays on the \
+target date.
+  4. Call simulate_changes with the candidate batch. If any day is still over \
+capacity, or it returns warnings, adjust and simulate again. Only call \
+propose_changes once a simulation shows every day in the range within \
+capacity.
+  5. If that's impossible — the range's total scheduled hours exceed its \
+total capacity (fits_in_range is false), or locked work alone overloads a \
+day — say so plainly with the numbers, propose the best partial plan, and \
+move the remainder to the following week rather than overloading another day.
+Don't shrink estimated_effort to make the numbers fit — an estimate is the \
+user's statement of how long something takes, and rebalancing moves work, it \
+doesn't make it smaller. Each rationale should say where the work went and \
+why that day has room.
+
 ## Style
 Be direct and concrete: name the actual tasks, state the actual numbers. Keep \
 answers proportional to the question — a yes/no question gets a short answer, \
@@ -87,16 +125,15 @@ _WEEKDAY_NAMES = {1: "Mon", 2: "Tue", 3: "Wed", 4: "Thu", 5: "Fri", 6: "Sat", 7:
 
 
 def build_preferences_block(preferences: dict) -> str:
-    """The user's planning preferences, rendered as the second (also cached)
-    system block. Stable for the life of a conversation in practice, so it's
-    fine to cache — see the render-order note in prompt-caching.md."""
+    """The user's planning preferences, rendered for the per-turn context
+    block. Not part of the system prompt — see `build_user_turn`."""
     workdays = sorted(preferences.get("workdays") or [1, 2, 3, 4, 5])
     workday_names = ", ".join(_WEEKDAY_NAMES[d] for d in workdays if d in _WEEKDAY_NAMES)
     capacity = preferences.get("daily_capacity_hours", 4.0)
     horizon = preferences.get("urgency_horizon_days", 3)
 
     lines = [
-        "## The user's planning preferences",
+        "The user's current planning preferences (these override any earlier turn's):",
         f"Daily capacity: {capacity}h on workdays ({workday_names}); 0h on other days.",
         f"Urgency horizon: a task within {horizon} day(s) of its due date counts as urgent.",
     ]
@@ -106,22 +143,23 @@ def build_preferences_block(preferences: dict) -> str:
     return "\n".join(lines)
 
 
-def build_system_blocks(preferences: dict) -> list[dict]:
-    """System content for the request. `cache_control` sits on the last block,
-    which caches this block, the frozen prompt above it, and the tool
-    definitions that render before `system` — one cache entry for all three."""
-    return [
-        {"type": "text", "text": SYSTEM_PROMPT},
-        {
-            "type": "text",
-            "text": build_preferences_block(preferences),
-            "cache_control": {"type": "ephemeral"},
-        },
-    ]
+def build_system_blocks() -> list[dict]:
+    """System content for the request: the frozen prompt alone, with the
+    `cache_control` breakpoint on it — which caches it together with the tool
+    definitions that render before `system`. Identical for every user and
+    every turn, so one cache entry serves everyone."""
+    return [{"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}]
 
 
-def build_user_turn(today: date, message: str) -> str:
-    """Wraps the user's message with the one piece of context that must never
-    be cached: today's date. This is the only volatile content in the prompt,
-    and it lands after the cache breakpoint, never before it."""
-    return f"(Today is {today.strftime('%A, %B %d, %Y')}.)\n\n{message}"
+def build_user_turn(today: date, message: str, preferences: dict) -> list[dict]:
+    """The new user turn: a context block (today's date and the user's
+    planning preferences), then the user's own message as a separate block.
+
+    Both kinds of context live here rather than in `system` because they can
+    change mid-conversation, and the conversation must stay append-only: the
+    model rejects replayed thinking blocks once anything before them has been
+    edited (see service.py). The two-block shape also lets the chat history
+    view show just the message — the last text block — without parsing.
+    """
+    context = f"(Today is {today.strftime('%A, %B %d, %Y')}.)\n\n{build_preferences_block(preferences)}"
+    return [{"type": "text", "text": context}, {"type": "text", "text": message}]

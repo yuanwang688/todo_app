@@ -183,7 +183,12 @@ def _range_bounds(ctx: GradeContext, spec: str) -> tuple[date, date]:
         start, _ = triage.week_bounds(ctx.today)
         nxt = start + timedelta(days=7)
         return nxt, nxt + timedelta(days=6)
-    raise GraderError(f"unknown range {spec!r}; known: this_week, next_week, today")
+    if spec == "two_weeks":
+        # This week and next — catches a rebalance that "fixes" this week by
+        # dumping the overflow onto next Monday.
+        start, _ = triage.week_bounds(ctx.today)
+        return start, start + timedelta(days=13)
+    raise GraderError(f"unknown range {spec!r}; known: this_week, next_week, two_weeks, today")
 
 
 def _titles(snapshot: dict[str, dict], where: dict | None) -> list[str]:
@@ -370,6 +375,23 @@ def no_dates_on_weekend(ctx: GradeContext, where: dict | None = None) -> GradeRe
     return _ok("no_dates_on_weekend")
 
 
+@grader("no_dates_before_today")
+def no_dates_before_today(ctx: GradeContext) -> GradeResult:
+    """Rescheduling into the past isn't rescheduling — it's making a task overdue."""
+    offenders = []
+    for item in _items(ctx):
+        for field in ("target_date", "start_date", "end_date"):
+            value = item.changes.get(field)
+            if value is None:
+                continue
+            parsed = value if isinstance(value, date) else date.fromisoformat(str(value))
+            if parsed < ctx.today:
+                offenders.append(f"{ctx.before.get(item.todo_id, {}).get('title')}: {field}={parsed}")
+    if offenders:
+        return _fail("no_dates_before_today", f"scheduled into the past: {offenders[:5]}")
+    return _ok("no_dates_before_today")
+
+
 # ── workload graders ────────────────────────────────────────────────────────
 
 
@@ -393,9 +415,10 @@ def workload_decreases(ctx: GradeContext, range: str = "this_week", min_delta: f
 def no_day_over_capacity(ctx: GradeContext, range: str = "this_week") -> GradeResult:
     start, end = _range_bounds(ctx, range)
     capacity = ctx.preferences.get("daily_capacity_hours", triage.DEFAULT_DAILY_CAPACITY_HOURS)
+    workdays = frozenset(ctx.preferences.get("workdays") or [1, 2, 3, 4, 5])
     after = _tasks(apply_in_memory(ctx.before, ctx.result.proposal))
     overloaded = [f"{l.day}: {l.scheduled_hours}h/{l.capacity_hours}h"
-                  for l in triage.workload(after, start, end, capacity) if l.is_overloaded]
+                  for l in triage.workload(after, start, end, capacity, workdays) if l.is_overloaded]
     if overloaded:
         return _fail("no_day_over_capacity", f"still over capacity: {overloaded}")
     return _ok("no_day_over_capacity")

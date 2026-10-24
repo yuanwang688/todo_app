@@ -15,7 +15,7 @@ sets that to Haiku for cheap local dev. To grade the production model, override
 it for the run (env vars beat `.env`):
 
 ```bash
-ANTHROPIC_MODEL=claude-opus-5 pytest evals
+ANTHROPIC_MODEL=claude-sonnet-5-5 pytest evals
 ```
 
 Don't run them against Ollama (`ANTHROPIC_BASE_URL`): a small local model's

@@ -255,8 +255,9 @@ cat <<EOF
        "Am I overcommitted today?"
        "I think I've entered some things twice. Can you tidy that up?"
        "Clear out my week — I'm overloaded. Push whatever isn't essential."
-     (the last one needs Phase C's propose_changes tool, which hasn't
-     shipped yet — the assistant will say so rather than pretend to help)
+       "Am I overcommitted this week?"
+       "Rebalance my week so no day is over capacity."
+     Capacity, workdays and timezone live under Planning in the header.
 
   Seed data persists across runs. Use --fresh to wipe and reseed.
   Press Ctrl+C to stop everything (your data is kept either way).

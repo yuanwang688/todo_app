@@ -7,15 +7,23 @@ harness, tests) that just want the final result.
 
 Design notes that matter if you're changing this file:
 
-- **`max_tokens` is generous (8000) on purpose.** Claude Opus 5 thinks by
-  default when `thinking` is omitted, and `max_tokens` caps thinking *and*
-  response text together — too tight a budget truncates the answer before any
-  text comes out. See shared/model-migration.md → Migrating to Claude Opus 5.
-- **Thinking is left on (adaptive, the default).** Disabling it on this model
-  has two documented failure modes — tool calls can arrive as plain text
-  instead of a `tool_use` block, and `<thinking>` tags can leak into the
-  visible reply — so `effort` is the depth/cost lever here, not
-  `thinking: {type: "disabled"}`.
+- **Model: `settings.anthropic_model`** — Claude Sonnet 5.5 in production,
+  Haiku 5.5 in local dev (.env.example), or an Ollama model via
+  `ANTHROPIC_BASE_URL`. Everything below must hold on all of them. `effort` is
+  set explicitly because the defaults differ (Sonnet `high`, Haiku `medium`).
+- **`max_tokens` is generous (8000) on purpose.** Haiku 5.5 thinks by default
+  when `thinking` is omitted, and `max_tokens` caps thinking *and* response
+  text together — too tight a budget truncates the answer before any text
+  comes out. See shared/model-migration.md → Migrating to Claude Haiku 5.5.
+- **Thinking is left on (adaptive, the default)** and `effort` is the
+  depth/cost lever. Never send `temperature`/`top_p`/`top_k` or an assistant
+  prefill — both return a 400 on Sonnet 5.5 and Haiku 5.5.
+- **History is strictly append-only.** Sonnet 5.5 and Haiku 5.5 reject a request that
+  replays a thinking block after anything before it — `system`, `tools`, or
+  earlier messages — has changed (the "history-editing check"). That's why the
+  system prompt is byte-frozen and per-user planning preferences ride in each
+  user turn instead of a system block: saving new preferences mid-conversation
+  would otherwise 400 every later turn of the rolling conversation.
 - **`propose_changes` is the only write path, and it's not a write.** It
   validates and persists a `Proposal` row; nothing in `todos` changes until
   the user calls `/api/proposals/{id}/apply`. `AgentTurnResult.proposal` is
@@ -55,7 +63,9 @@ from .tools import TOOL_SCHEMAS, execute_tool
 MODEL = settings.anthropic_model
 EFFORT = "medium"
 MAX_TOKENS = 8000
-MAX_TOOL_ITERATIONS = 6
+# A rebalance is read workload → simulate → (adjust, simulate again) → propose
+# → final reply; 6 left no room for a second simulation pass.
+MAX_TOOL_ITERATIONS = 10
 
 
 @dataclass
@@ -184,7 +194,7 @@ async def _run_loop(
 ) -> AsyncIterator[dict]:
     """Yields streaming events (`text_delta`, `tool_call`) and, last, one
     `result` event carrying everything the caller needs to persist and log."""
-    system = build_system_blocks(preferences)
+    system = build_system_blocks()
 
     # `messages` mixes SDK response objects (needed to make the next API call
     # within this turn) with plain dicts (history, tool results). `persistable`
@@ -194,7 +204,7 @@ async def _run_loop(
     messages: list[dict[str, Any]] = [dict(m) for m in history]
     persistable: list[dict[str, Any]] = []
 
-    user_entry = {"role": "user", "content": [{"type": "text", "text": build_user_turn(today, message)}]}
+    user_entry = {"role": "user", "content": build_user_turn(today, message, preferences)}
     messages.append(user_entry)
     persistable.append(user_entry)
 

@@ -15,6 +15,7 @@ import yaml
 from sqlalchemy import select as sa_select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app import planning
 from app.models import Todo
 
 from . import fixtures
@@ -23,13 +24,9 @@ from .graders import GradeContext, GradeResult, GraderError, run_grader
 
 SCENARIO_DIR = Path(__file__).parent / "scenarios"
 
-DEFAULT_PREFERENCES: dict[str, Any] = {
-    "daily_capacity_hours": 4.0,
-    "workdays": [1, 2, 3, 4, 5],
-    "urgency_horizon_days": 3,
-    "timezone": "UTC",
-    "notes": None,
-}
+# The production defaults, so a scenario without a `preferences:` block plans
+# exactly as a user who has never opened the planning settings.
+DEFAULT_PREFERENCES: dict[str, Any] = dict(planning.DEFAULT_PREFERENCES)
 
 #: Fields compared between the before/after snapshots and exposed to selectors.
 SNAPSHOT_FIELDS = (

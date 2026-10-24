@@ -170,6 +170,41 @@ def overloaded_week() -> list[dict]:
     ]
 
 
+def rebalance_week() -> list[dict]:
+    """A week that's over capacity on one day but fits as a whole — so a
+    rebalance inside the week (or into next week) is possible, but only by
+    planning around locked work and splitting a task too big for one day.
+
+    Mon–Fri at 4h/day = 20h capacity; 18.5h scheduled. Monday carries 11.5h
+    (7.5h over). The 5h migration doesn't fit in any single day's 4h, so the
+    only way to keep it this week is a start/end range. Tue and Wed hold
+    locked hours that must stay put.
+    """
+    return [
+        # ── Monday: 11.5h ───────────────────────────────────────────────────
+        _todo("Migrate the billing schema", category="Work", target_date=d(0),
+              estimated_effort=5.0, importance=3),
+        _todo("Write the migration tests", category="Work", target_date=d(0),
+              estimated_effort=3.0, importance=3),
+        _todo("Update the API docs", category="Work", target_date=d(0),
+              estimated_effort=2.0, importance=1),
+        _todo("Triage the bug backlog", category="Work", target_date=d(0),
+              estimated_effort=1.5, importance=1),
+        # ── Tue–Fri: 7h, 3 of them locked ───────────────────────────────────
+        _todo("One-on-one with Priya", category="Work", target_date=d(1),
+              estimated_effort=1.0, importance=3, locked=True),
+        _todo("Quarterly planning offsite", category="Work", target_date=d(2),
+              estimated_effort=3.0, importance=3, locked=True),
+        _todo("Clean up stale branches", category="Work", target_date=d(3),
+              estimated_effort=1.0, importance=1),
+        _todo("Review the design doc", category="Work", target_date=d(4),
+              estimated_effort=2.0, importance=2),
+        # ── undated (lands on no day; must not count toward the week) ───────
+        _todo("Learn the new CI system", category="Work", estimated_effort=3.0,
+              importance=2),
+    ]
+
+
 def duplicates() -> list[dict]:
     """One exact-duplicate pair, plus two pairs that only *look* similar."""
     return [
@@ -196,6 +231,7 @@ def duplicates() -> list[dict]:
 FIXTURES: dict[str, Callable[[], list[dict]]] = {
     "mixed_40": mixed_40,
     "overloaded_week": overloaded_week,
+    "rebalance_week": rebalance_week,
     "duplicates": duplicates,
 }
 

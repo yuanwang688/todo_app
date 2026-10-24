@@ -6,7 +6,7 @@ proposes; it never computes these. Keep this module and TRIAGE.md in sync.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, timedelta
 from typing import Iterable, Protocol
 
@@ -213,3 +213,88 @@ def week_bounds(day: date) -> tuple[date, date]:
     """Monday–Sunday week containing `day`, matching the frontend weekly view."""
     start = day - timedelta(days=day.weekday())
     return start, start + timedelta(days=6)
+
+
+def attributed_hours(task: TaskLike, day: date) -> float:
+    """Effort a task contributes to one day (0 if it doesn't land there) —
+    the per-task figure behind `day_load`, for breakdowns."""
+    return round(_spread_effort(task, day), 2) if occupies_day(task, day) else 0.0
+
+
+# ── planning simulation ─────────────────────────────────────────────────────
+
+_DATE_FIELDS = ("target_date", "start_date", "end_date")
+
+
+@dataclass(frozen=True)
+class TaskSnapshot:
+    """A plain, immutable copy of a task — what the planning simulation
+    projects proposed changes onto without touching the ORM object."""
+
+    id: str
+    title: str
+    completed: bool = False
+    category: str | None = None
+    target_date: date | None = None
+    start_date: date | None = None
+    end_date: date | None = None
+    estimated_effort: float | None = None
+    importance: int | None = None
+    is_focus: bool = False
+    locked: bool = False
+
+    @classmethod
+    def of(cls, task, task_id: str) -> "TaskSnapshot":
+        return cls(
+            id=task_id,
+            title=task.title,
+            completed=task.completed,
+            category=task.category,
+            target_date=task.target_date,
+            start_date=task.start_date,
+            end_date=task.end_date,
+            estimated_effort=task.estimated_effort,
+            importance=task.importance,
+            is_focus=task.is_focus,
+            locked=task.locked,
+        )
+
+
+def _coerce(changes: dict) -> dict:
+    """Proposed changes arrive from the model with dates as ISO strings."""
+    out = dict(changes)
+    for field in _DATE_FIELDS:
+        if isinstance(out.get(field), str):
+            out[field] = date.fromisoformat(out[field])
+    return out
+
+
+def project(tasks: Iterable[TaskSnapshot], items: Iterable[dict]) -> list[TaskSnapshot]:
+    """The task list as it would look if every item were applied.
+
+    `items` use the propose_changes shape (`op`, `todo_id`, `changes`) and are
+    assumed already validated — this is arithmetic, not policy. Raises
+    `ValueError` for an update/delete naming a task that isn't in `tasks`.
+    """
+    by_id = {t.id: t for t in tasks}
+    for n, item in enumerate(items):
+        op = item.get("op")
+        # Only fields that affect workload math are modelled; `description`
+        # (create-only) is dropped here.
+        changes = {
+            k: v for k, v in _coerce(item.get("changes") or {}).items()
+            if k in TaskSnapshot.__dataclass_fields__ and k != "id"
+        }
+        if op == "create":
+            by_id[f"new-{n}"] = TaskSnapshot(id=f"new-{n}", **{"title": "", **changes})
+            continue
+        todo_id = item.get("todo_id")
+        if todo_id not in by_id:
+            raise ValueError(f"unknown task id {todo_id!r}")
+        if op == "delete":
+            del by_id[todo_id]
+        elif op == "update":
+            by_id[todo_id] = replace(by_id[todo_id], **changes)
+        else:
+            raise ValueError(f"unknown op {op!r}")
+    return list(by_id.values())

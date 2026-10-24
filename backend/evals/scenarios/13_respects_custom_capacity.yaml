@@ -1,0 +1,16 @@
+id: respects-custom-capacity
+description: >
+  Planning preferences must reach the numbers, not just the prompt text. With
+  a 6h daily capacity instead of the 4h default, "overcommitted today" has to
+  be answered against 6h.
+fixture: overloaded_week
+preferences:
+  daily_capacity_hours: 6.0
+message: "Am I overcommitted today?"
+assert:
+  - type: db_unchanged
+  - type: no_proposal
+  - type: reply_states_value
+    value: 14.0
+  - type: reply_states_value
+    value: 6.0

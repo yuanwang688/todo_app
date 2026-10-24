@@ -186,3 +186,24 @@ class TodoRevision(Base):
         Uuid(), ForeignKey("proposal_items.id", ondelete="SET NULL"), nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class UserPlanningPreferences(Base):
+    """Per-user capacity and planning policy (Phase D). One row per user,
+    created on first save — until then `app.planning.DEFAULT_PREFERENCES`
+    applies. `workdays` is a JSON list of ISO weekdays (1 = Mon … 7 = Sun)
+    rather than the plan's SMALLINT[], so the model runs unchanged on the
+    SQLite test backend — see migration 008."""
+
+    __tablename__ = "user_planning_preferences"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+    daily_capacity_hours: Mapped[float] = mapped_column(Float, default=4.0, nullable=False)
+    workdays: Mapped[list[int]] = mapped_column(_JSONVariant, nullable=False)
+    urgency_horizon_days: Mapped[int] = mapped_column(SmallInteger, default=3, nullable=False)
+    timezone: Mapped[str] = mapped_column(Text, default="UTC", nullable=False)
+    # Free-text planning policy, injected verbatim into the assistant's prompt.
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

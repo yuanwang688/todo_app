@@ -1,0 +1,19 @@
+id: overcommitted-week
+description: >
+  Phase D's first exit criterion: "am I overcommitted this week?" gets
+  numerically correct answers. The week fits as a whole (18.5h against 20h)
+  but Monday doesn't (11.5h against 4h) — a correct answer has to say both,
+  with the real figures from get_workload_summary. A question, so no proposal.
+fixture: rebalance_week
+message: "Am I overcommitted this week?"
+assert:
+  - type: db_unchanged
+  - type: no_proposal
+  - type: reply_states_value
+    value: 11.5
+  - type: reply_states_value
+    value: 4.0
+  - type: reply_states_value
+    value: 18.5
+  - type: reply_states_value
+    value: 20.0

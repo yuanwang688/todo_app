@@ -63,3 +63,51 @@ async def test_get_chat_omits_expired_proposal(auth_client, db, user, conversati
 
     r = await auth_client.get("/api/chat")
     assert r.json()["pending_proposals"] == []
+
+
+async def test_post_message_uses_saved_planning_preferences(auth_client, monkeypatch):
+    """Phase D: the turn plans against the user's saved preferences and their
+    local date, not the hardcoded defaults the router used before."""
+    from app.agent import service
+    from app.routers import chat as chat_router
+
+    prefs = {
+        "daily_capacity_hours": 6.0, "workdays": [1, 2, 3, 4, 5, 6], "urgency_horizon_days": 2,
+        "timezone": "Pacific/Kiritimati", "notes": "Mornings only.",
+    }
+    assert (await auth_client.put("/api/planning-preferences", json=prefs)).status_code == 200
+
+    seen = {}
+
+    async def fake_stream_turn(**kwargs):
+        seen.update(kwargs)
+        yield {"type": "result", "result": service.AgentTurnResult(reply_text="ok")}
+
+    monkeypatch.setattr(service, "is_configured", lambda: True)
+    monkeypatch.setattr(service, "stream_turn", fake_stream_turn)
+    r = await auth_client.post("/api/chat/messages", json={"message": "hi"})
+    assert r.status_code == 200
+    assert seen["preferences"] == prefs
+    assert seen["today"] == chat_router.planning.today_for(prefs)
+
+
+async def test_get_chat_shows_only_the_message_not_the_context_block(auth_client, db, user, conversation):
+    """User turns are [context, message] since Phase D; turns persisted before
+    that are a single block with a date prefix. Both display as the message."""
+    from app.models import Message
+
+    db.add_all([
+        Message(conversation_id=conversation.id, role="user", seq=0,
+                content=[{"type": "text", "text": "(Today is Monday, August 03, 2026.)\n\nold question"}]),
+        Message(conversation_id=conversation.id, role="assistant", seq=1,
+                content=[{"type": "text", "text": "old answer"}]),
+        Message(conversation_id=conversation.id, role="user", seq=2,
+                content=[{"type": "text", "text": "(Today is …)\n\nThe user's current planning preferences…"},
+                         {"type": "text", "text": "new question"}]),
+        Message(conversation_id=conversation.id, role="assistant", seq=3,
+                content=[{"type": "text", "text": "new answer"}]),
+    ])
+    await db.commit()
+
+    r = await auth_client.get("/api/chat")
+    assert [m["text"] for m in r.json()["messages"]] == ["old question", "old answer", "new question", "new answer"]
