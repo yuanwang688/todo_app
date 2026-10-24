@@ -8,6 +8,11 @@ tool-result block needs. Errors are reported to the model as data, not
 raised, so a bad `todo_id` becomes a turn the model can recover from instead
 of a crashed request.
 
+`simulate_changes` (Phase D) is read-only too: it projects a candidate batch
+onto an in-memory copy of the list and reports per-day load before and
+after, so a rebalance can be checked against capacity *before* it becomes a
+proposal the user has to review. It persists nothing.
+
 `propose_changes` (Phase C, the one write path) lives in `propose.py` — its
 validation and persistence are substantial enough, and different enough in
 shape, to not force through the read-only tools' dispatch. `TOOL_SCHEMAS`
@@ -104,8 +109,11 @@ TOOL_SCHEMAS: list[dict] = [
         "name": "get_workload_summary",
         "description": (
             "Scheduled effort vs. capacity for each day in a date range, computed deterministically "
-            "— never estimate this yourself. Also lists incomplete undated tasks, since they don't "
-            f"land on any specific day. Range is capped at {MAX_WORKLOAD_DAYS} days."
+            "— never estimate this yourself. Each day lists the tasks landing on it and the hours each "
+            "contributes (a start/end range spreads its estimate evenly across its days), plus "
+            "free_hours and overage_hours. Non-workdays have 0h capacity. Also lists incomplete "
+            "undated tasks and overdue tasks, since neither lands on a day in the range. "
+            f"Range is capped at {MAX_WORKLOAD_DAYS} days."
         ),
         "input_schema": {
             "type": "object",
@@ -114,6 +122,41 @@ TOOL_SCHEMAS: list[dict] = [
                 "end_date": {"type": "string", "format": "date"},
             },
             "required": ["start_date", "end_date"],
+            "additionalProperties": False,
+        },
+        "strict": True,
+    },
+    {
+        "name": "simulate_changes",
+        "description": (
+            "Dry run: project a candidate batch of changes onto the task list and return each day's "
+            "load before and after, against capacity. Changes nothing and creates no proposal. Use it "
+            "to check a rebalance or reschedule before calling propose_changes — if any day is still "
+            "over capacity, or work landed on a non-workday or in the past, adjust the batch and "
+            "simulate again. Items use the same op/todo_id/changes shape as propose_changes."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "start_date": {"type": "string", "format": "date"},
+                "end_date": {"type": "string", "format": "date"},
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "op": {"type": "string", "enum": ["create", "update", "delete"]},
+                            "todo_id": {"type": "string", "description": "Required for update/delete."},
+                            "changes": PROPOSE_CHANGES_SCHEMA["input_schema"]["properties"]["items"]["items"][
+                                "properties"
+                            ]["changes"],
+                        },
+                        "required": ["op"],
+                        "additionalProperties": False,
+                    },
+                },
+            },
+            "required": ["start_date", "end_date", "items"],
             "additionalProperties": False,
         },
         "strict": True,
@@ -132,7 +175,11 @@ def _parse_date(value: str, field: str) -> date:
         raise ValueError(f"{field} must be an ISO date (YYYY-MM-DD), got {value!r}") from exc
 
 
-def _row(todo: Todo, today: date) -> dict[str, Any]:
+def _horizon(preferences: dict) -> int:
+    return preferences.get("urgency_horizon_days", triage.DEFAULT_URGENCY_HORIZON_DAYS)
+
+
+def _row(todo: Todo, today: date, horizon: int = triage.DEFAULT_URGENCY_HORIZON_DAYS) -> dict[str, Any]:
     return {
         "id": str(todo.id),
         "title": todo.title,
@@ -146,7 +193,7 @@ def _row(todo: Todo, today: date) -> dict[str, Any]:
         "unclassified": triage.is_unclassified(todo),
         "is_focus": todo.is_focus,
         "locked": todo.locked,
-        "quadrant": triage.quadrant(todo, today),
+        "quadrant": triage.quadrant(todo, today, horizon),
         "due": triage.describe_due(todo, today),
         "days_left": triage.days_left(todo, today),
     }
@@ -159,6 +206,7 @@ async def search_todos(
     db: AsyncSession,
     user_id: uuid.UUID,
     today: date,
+    preferences: dict,
     *,
     query: str | None = None,
     completed: bool | None = None,
@@ -216,7 +264,7 @@ async def search_todos(
     page = todos[:effective_limit]
 
     payload = {
-        "tasks": [_row(t, today) for t in page],
+        "tasks": [_row(t, today, _horizon(preferences)) for t in page],
         "total_matches": total,
         "returned": len(page),
     }
@@ -226,7 +274,7 @@ async def search_todos(
 
 
 async def get_todo_details(
-    db: AsyncSession, user_id: uuid.UUID, today: date, *, todo_id: str
+    db: AsyncSession, user_id: uuid.UUID, today: date, preferences: dict, *, todo_id: str
 ) -> tuple[str, bool]:
     try:
         parsed_id = uuid.UUID(todo_id)
@@ -238,9 +286,30 @@ async def get_todo_details(
     if todo is None:
         return json.dumps({"error": "not_found", "todo_id": todo_id}), True
 
-    payload = _row(todo, today)
+    payload = _row(todo, today, _horizon(preferences))
     payload["description"] = todo.description
     return json.dumps(payload), False
+
+
+def _parse_range(start_date: str, end_date: str) -> tuple[date, date]:
+    start = _parse_date(start_date, "start_date")
+    end = _parse_date(end_date, "end_date")
+    if end < start:
+        raise ValueError("end_date is before start_date")
+    if (end - start).days + 1 > MAX_WORKLOAD_DAYS:
+        end = start + timedelta(days=MAX_WORKLOAD_DAYS - 1)
+    return start, end
+
+
+def _capacity(preferences: dict) -> tuple[float, frozenset[int]]:
+    capacity = preferences.get("daily_capacity_hours", triage.DEFAULT_DAILY_CAPACITY_HOURS)
+    workdays = frozenset(preferences.get("workdays") or [1, 2, 3, 4, 5])
+    return capacity, workdays
+
+
+async def _incomplete_todos(db: AsyncSession, user_id: uuid.UUID) -> list[Todo]:
+    result = await db.execute(select(Todo).where(Todo.user_id == user_id, Todo.completed.is_(False)))
+    return list(result.scalars().all())
 
 
 async def get_workload_summary(
@@ -252,40 +321,159 @@ async def get_workload_summary(
     start_date: str,
     end_date: str,
 ) -> tuple[str, bool]:
-    start = _parse_date(start_date, "start_date")
-    end = _parse_date(end_date, "end_date")
-    if end < start:
-        return json.dumps({"error": "end_date is before start_date"}), True
-    if (end - start).days + 1 > MAX_WORKLOAD_DAYS:
-        end = start + timedelta(days=MAX_WORKLOAD_DAYS - 1)
-
-    result = await db.execute(select(Todo).where(Todo.user_id == user_id, Todo.completed.is_(False)))
-    todos = list(result.scalars().all())
-
-    capacity = preferences.get("daily_capacity_hours", triage.DEFAULT_DAILY_CAPACITY_HOURS)
-    workdays = frozenset(preferences.get("workdays") or [1, 2, 3, 4, 5])
+    start, end = _parse_range(start_date, end_date)
+    todos = await _incomplete_todos(db, user_id)
+    capacity, workdays = _capacity(preferences)
+    horizon = _horizon(preferences)
     days = triage.workload(todos, start, end, capacity, workdays)
 
-    undated = [
-        {"id": str(t.id), "title": t.title, "estimated_effort": t.estimated_effort, "quadrant": triage.quadrant(t, today)}
-        for t in todos
-        if triage.effective_due_date(t) is None
-    ]
+    def day_entry(d: triage.DayLoad) -> dict[str, Any]:
+        landing = [t for t in todos if triage.occupies_day(t, d.day)]
+        landing.sort(key=lambda t: -triage.attributed_hours(t, d.day))
+        return {
+            "date": d.day.isoformat(),
+            "weekday": d.day.strftime("%A"),
+            "is_workday": d.day.isoweekday() in workdays,
+            "scheduled_hours": d.scheduled_hours,
+            "capacity_hours": d.capacity_hours,
+            "free_hours": round(max(0.0, d.capacity_hours - d.scheduled_hours), 2),
+            "overage_hours": d.overage_hours,
+            "is_overloaded": d.is_overloaded,
+            "tasks": [
+                {
+                    "id": str(t.id),
+                    "title": t.title,
+                    "hours": triage.attributed_hours(t, d.day),
+                    "estimated_effort": t.estimated_effort,
+                    "spread_over_range": t.target_date != d.day,
+                    "quadrant": triage.quadrant(t, today, horizon),
+                    "importance": t.importance,
+                    "locked": t.locked,
+                }
+                for t in landing
+            ],
+        }
+
+    def brief(t: Todo) -> dict[str, Any]:
+        return {
+            "id": str(t.id),
+            "title": t.title,
+            "estimated_effort": t.estimated_effort,
+            "quadrant": triage.quadrant(t, today, horizon),
+            "locked": t.locked,
+        }
+
+    overloaded = [d for d in days if d.is_overloaded]
+    total_scheduled = round(sum(d.scheduled_hours for d in days), 2)
+    total_capacity = round(sum(d.capacity_hours for d in days), 2)
+    overdue = [t for t in todos if triage.is_overdue(t, today)]
 
     payload = {
+        "range": {"start_date": start.isoformat(), "end_date": end.isoformat()},
+        "days": [day_entry(d) for d in days],
+        "total_scheduled_hours": total_scheduled,
+        "total_capacity_hours": total_capacity,
+        "overloaded_days": [d.day.isoformat() for d in overloaded],
+        "total_overage_hours": round(sum(d.overage_hours for d in overloaded), 2),
+        # Whether the range as a whole has room for everything scheduled in it —
+        # i.e. whether a rebalance *within* the range is arithmetically possible.
+        # Individual tasks may still be too large for any single day's capacity.
+        "fits_in_range": total_scheduled <= total_capacity,
+        "undated_incomplete_tasks": [brief(t) for t in todos if triage.effective_due_date(t) is None],
+        "overdue_tasks": [{**brief(t), "due": triage.describe_due(t, today)} for t in overdue],
+    }
+    return json.dumps(payload), False
+
+
+def _check_sim_item(item: dict[str, Any]) -> None:
+    op = item.get("op")
+    changes = item.get("changes") or {}
+    if op in ("update", "delete") and not item.get("todo_id"):
+        raise ValueError(f"op={op} requires todo_id")
+    if op == "create" and "title" not in changes:
+        raise ValueError("op=create requires a title")
+    allowed = triage.AGENT_WRITABLE_ON_CREATE if op == "create" else triage.AGENT_WRITABLE_FIELDS
+    illegal = set(changes) - allowed
+    if illegal:
+        raise ValueError(f"fields not writable on {op}: {sorted(illegal)}")
+    for field in ("target_date", "start_date", "end_date"):
+        if isinstance(changes.get(field), str):
+            _parse_date(changes[field], field)
+
+
+async def simulate_changes(
+    db: AsyncSession,
+    user_id: uuid.UUID,
+    today: date,
+    preferences: dict,
+    *,
+    start_date: str,
+    end_date: str,
+    items: list[dict[str, Any]],
+) -> tuple[str, bool]:
+    start, end = _parse_range(start_date, end_date)
+    todos = await _incomplete_todos(db, user_id)
+    by_id = {str(t.id): t for t in todos}
+
+    for item in items:
+        _check_sim_item(item)
+        todo_id = item.get("todo_id")
+        if todo_id is None:
+            continue
+        if todo_id not in by_id:
+            raise ValueError(f"task {todo_id} doesn't exist or is already completed")
+        if by_id[todo_id].locked:
+            raise ValueError(
+                f"task {todo_id} ('{by_id[todo_id].title}') is locked — it can't be part of any "
+                "proposal, so leave it out of the simulation too"
+            )
+
+    before = [triage.TaskSnapshot.of(t, str(t.id)) for t in todos]
+    after = triage.project(before, items)
+    capacity, workdays = _capacity(preferences)
+    load_before = triage.workload(before, start, end, capacity, workdays)
+    load_after = triage.workload(after, start, end, capacity, workdays)
+
+    # Things a valid-looking batch can still get wrong, surfaced as facts.
+    warnings: list[str] = []
+    after_by_id = {t.id: t for t in after}
+    for n, item in enumerate(items):
+        if item.get("op") == "delete":
+            continue
+        task = after_by_id[item.get("todo_id") or f"new-{n}"]
+        label = f"'{task.title}'"
+        for field in ("target_date", "start_date", "end_date"):
+            value = getattr(task, field)
+            if field in (item.get("changes") or {}) and value is not None:
+                if value < today:
+                    warnings.append(f"{label}: {field} {value.isoformat()} is in the past")
+                if field == "target_date" and value.isoweekday() not in workdays:
+                    warnings.append(f"{label}: target_date {value.isoformat()} is a non-workday (0h capacity)")
+        if task.start_date and task.end_date and task.end_date < task.start_date:
+            warnings.append(f"{label}: end_date is before start_date")
+        if (task.start_date is None) != (task.end_date is None):
+            warnings.append(f"{label}: has only one of start_date/end_date, so it lands on no day")
+
+    still_over = [a for a in load_after if a.is_overloaded]
+    payload = {
+        "range": {"start_date": start.isoformat(), "end_date": end.isoformat()},
         "days": [
             {
-                "date": d.day.isoformat(),
-                "scheduled_hours": d.scheduled_hours,
-                "capacity_hours": d.capacity_hours,
-                "overage_hours": d.overage_hours,
-                "is_overloaded": d.is_overloaded,
+                "date": b.day.isoformat(),
+                "weekday": b.day.strftime("%A"),
+                "capacity_hours": b.capacity_hours,
+                "scheduled_hours_before": b.scheduled_hours,
+                "scheduled_hours_after": a.scheduled_hours,
+                "overage_hours_after": a.overage_hours,
             }
-            for d in days
+            for b, a in zip(load_before, load_after)
         ],
-        "total_scheduled_hours": round(sum(d.scheduled_hours for d in days), 2),
-        "total_capacity_hours": round(sum(d.capacity_hours for d in days), 2),
-        "undated_incomplete_tasks": undated,
+        "total_scheduled_hours_before": round(sum(d.scheduled_hours for d in load_before), 2),
+        "total_scheduled_hours_after": round(sum(d.scheduled_hours for d in load_after), 2),
+        "overloaded_days_after": [d.day.isoformat() for d in still_over],
+        "all_days_within_capacity": not still_over,
+        "warnings": warnings,
+        "note": "Simulation only — nothing was changed and no proposal was created.",
     }
     return json.dumps(payload), False
 
@@ -296,6 +484,7 @@ EXECUTORS: dict[str, Executor] = {
     "search_todos": search_todos,
     "get_todo_details": get_todo_details,
     "get_workload_summary": get_workload_summary,
+    "simulate_changes": simulate_changes,
 }
 
 
@@ -332,8 +521,6 @@ async def execute_tool(
             "allowed": sorted(allowed),
         }), True
     try:
-        if name == "get_workload_summary":
-            return await executor(db, user_id, today, preferences, **tool_input)
-        return await executor(db, user_id, today, **tool_input)
+        return await executor(db, user_id, today, preferences, **tool_input)
     except ValueError as exc:
         return json.dumps({"error": str(exc)}), True

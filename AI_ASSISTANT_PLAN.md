@@ -230,8 +230,8 @@ GET/PUT /api/planning-preferences
 | Decision | Choice | Why |
 |---|---|---|
 | Surface | **Claude API + Tool Runner** (`client.beta.messages.tool_runner`, part of the regular `anthropic` SDK) | Correction to the source plan: "plain Messages API with typed tools" and "the Claude Agent SDK" are not the only two options. The Tool Runner is a thin helper *on the Messages API* — it drives the request → execute → loop cycle over tools you define, with per-turn hooks for approval gating, logging, and result modification. Same learning value on tool-schema design, no hand-written loop. The Agent SDK is a separate product (Claude Code as a library, with built-in file/bash tools) and is the right choice for the Phase 3 capstone, not here. |
-| Model | `claude-opus-5`, `effort: "medium"` | Triage is a judgement task; correctness matters more than latency. Sweep `low`/`medium`/`high` on the eval set in Phase E and settle it with data. |
-| Thinking | Adaptive (the default on Opus 5) | `budget_tokens` is removed on current models — do not carry that pattern over from older examples. |
+| Model | `ANTHROPIC_MODEL`: `claude-sonnet-5-5` in production (moved from `claude-opus-5`, 2026-10-24), `claude-haiku-5-5` in local dev (`.env.example`) or a local Ollama model for plumbing tests, `effort: "medium"` | Triage is a judgement task, so correctness matters more than latency. Sonnet 5.5 ($2/$10 per MTok vs Opus 5's $5/$25) is the cost/quality middle; Haiku 5.5 ($0.10/$0.50) keeps the dev loop cheap. Sonnet hasn't been graded on the eval suite yet — **unvalidated**; Phase E's model comparison settles it with data. |
+| Thinking | Adaptive (the default on Sonnet 5.5 and Haiku 5.5; `disabled` is a 400 on Sonnet 5.5) | `budget_tokens` is removed on current models — do not carry that pattern over from older examples. |
 | Cheap path | `claude-haiku-4-5` for the title-only "which of these are duplicates?" pre-pass, if dedupe proves expensive | Only if evals show no quality loss. |
 | Caching | `cache_control` on the last system block (system prompt + tool defs + planning prefs) | ~90% off the cached prefix. Keep the system prompt **byte-frozen** — no `datetime.now()` interpolation. Today's date goes in the *user* turn, after the breakpoint. |
 | Streaming | SSE from FastAPI | Chat needs it; also avoids HTTP timeouts on long turns. |
@@ -262,10 +262,9 @@ Proposals expire after 24h (`pending` → `expired` on read) so a stale diff can
 [system, cached]  role + triage policy (§2 verbatim) + writable-field whitelist
                   + "you propose, the user approves" + rationale requirement
                   + tool definitions
-[system, cached]  user planning preferences (capacity, workdays, timezone, free-text policy)
 [messages]        conversation history
-[user turn]       today's date, current view context (which tab/date range the user is looking at),
-                  and the user's message
+[user turn]       block 1: today's date + the user's current planning preferences
+                  block 2: the user's message
 ```
 
 Volatile content strictly after the last cache breakpoint. Verify with `usage.cache_read_input_tokens` on every run — it's recorded in `agent_runs`, so a caching regression is visible in the run log rather than only on the bill.
@@ -480,9 +479,61 @@ test suite passed throughout — SQLite is lenient in ways Postgres/asyncpg is n
   have sidestepped bug #2's `ON DELETE SET NULL` complexity). Worth a follow-up phase, not a
   Phase C amendment.
 
-### Phase D — Planning simulation · ~2 sessions
-- `user_planning_preferences` table + settings UI.
-- Capacity/overage math surfaced through `get_workload_summary`; "rebalance my week" flows.
+### Phase D — Planning simulation · **built; live-model verification pending**
+- Migration 008 (`user_planning_preferences`) — verified up/down/up on Postgres 16.
+  **Deviation from §3.2:** `workdays` is JSONB, not `SMALLINT[]` — arrays have no SQLite
+  equivalent and the test suite runs the models on SQLite (same reasoning as migration 007).
+- `app/planning.py` owns `DEFAULT_PREFERENCES` (now imported by `evals/runner.py` too, replacing
+  the two hand-synced copies), validation, load/save, and `today_for()` — "today" is the user's
+  local date, so a user in UTC-8 asking at 9pm no longer gets tomorrow's urgency/overdue answers.
+  `GET/PUT /api/planning-preferences` (`routers/planning.py`); `POST /api/chat/messages` now
+  passes the saved preferences instead of hardcoded defaults.
+- `urgency_horizon_days` now actually reaches every quadrant the tools return — previously
+  `_row()` always used the default horizon regardless of preferences.
+- `get_workload_summary` gained the facts a rebalance needs: per-day task breakdown (hours each
+  task contributes, locked flag, quadrant), `free_hours`, `overloaded_days`,
+  `total_overage_hours`, `fits_in_range`, and `overdue_tasks` (which land on no day in the range).
+- **New read-only tool `simulate_changes`** — the "planning simulation" itself. Takes the same
+  `op/todo_id/changes` items as `propose_changes`, projects them onto an in-memory copy
+  (`triage.project`), and returns per-day before/after load plus warnings (dates in the past,
+  non-workday targets, half-open ranges). Persists nothing. The prompt's new rebalancing
+  section tells the model to simulate until every day fits and only then propose — the plan's
+  "rebalance actually brings each day under capacity" criterion is checked by deterministic
+  code before the user ever sees the proposal, not left to the model's arithmetic.
+- **Bug found while designing the rebalance flow:** `propose_changes` typed every date as a
+  plain string, so under strict mode the model could never *clear* a date. Since a
+  `target_date` wins over a start/end range in the workload math (`occupies_day`), a dated
+  task could never be spread across days — the only fix for a task bigger than one day's
+  capacity. Date fields are now `anyOf: [date string, null]` (supported on strict schemas).
+- `MAX_TOOL_ITERATIONS` 6 → 10: workload → simulate → adjust/simulate → propose → reply
+  didn't fit.
+- `PlanningSettingsModal` (header → **Planning**): capacity, workday toggles with a live weekly
+  total, urgency horizon, IANA timezone picker with a "use this device's timezone" shortcut,
+  planning notes. Browser-verified against local Postgres: defaults load, edits save and survive
+  a reload, Save disables with no workdays selected; all 418 timezones Chrome offers (including
+  legacy aliases like `Asia/Calcutta`) are accepted by the backend.
+- Evals: fixture `rebalance_week` (Monday 11.5h vs. 4h; week 18.5h vs. 20h; locked hours Tue/Wed;
+  a 5h task bigger than any day), scenarios 11 `overcommitted-week`, 12 `rebalance-week`,
+  13 `respects-custom-capacity`. New grader `no_dates_before_today`; new range `two_weeks`
+  (so dumping the overflow onto next Monday doesn't count as a fix); `no_day_over_capacity`
+  now honours the scenario's `workdays` (it silently assumed Mon–Fri). A known-good solution
+  for scenario 12 is pinned in `test_eval_harness.py` so the scenario is provably solvable.
+- **Local dev runs on `claude-haiku-5-5`** (PR #4 made the model configurable). That surfaced a design
+  bug in this phase: Haiku 5.5 (like Opus 5.5) rejects replayed thinking blocks once anything
+  before them changes, and the preferences block lived in `system` — so saving new Planning
+  settings mid-conversation would have 400'd every later turn of the rolling conversation.
+  Preferences now ride in each user turn as a separate context block (`[context, message]`); the
+  system prompt is a single frozen block identical for every user. History display shows only
+  the message block, and still handles pre-Phase-D single-block turns. Regression test asserts
+  `system` and earlier messages are byte-identical across a preferences change.
+- 181 unit tests pass.
+- ⏳ **Not yet done:** no scenario has run against Haiku 5.5, and scenarios 11–13 have **not run against any real model** — the API account
+  returned `400 credit balance is too low` on the first call, before any tokens were billed.
+  That also means the nullable-date schema change hasn't been accepted by the live API yet
+  (a schema rejection would 400 immediately and cost nothing — check that first). Re-run
+  `pytest evals -m evals -k "overcommitted or rebalance or capacity"` plus the full suite for
+  regressions from the prompt change, and browser-check "rebalance my week" end to end,
+  before calling this phase complete.
 - ✅ **Done when:** "am I overcommitted this week?" gives numerically correct answers and its rebalance proposal actually brings each day under capacity.
 
 ### Phase E — Eval workbench and CI gate · ~2 sessions, overlapping

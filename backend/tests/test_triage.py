@@ -4,7 +4,7 @@ These are the half of triage that must never involve a model. They pass from
 Phase A onwards — unlike the eval scenarios, which are the spec for the agent
 and fail until Phase B.
 """
-from datetime import date
+from datetime import date, timedelta
 
 import pytest
 
@@ -153,3 +153,41 @@ def test_completed_and_locked_are_never_writable():
 def test_title_is_writable_only_on_create():
     assert "title" not in triage.AGENT_WRITABLE_FIELDS
     assert "title" in triage.AGENT_WRITABLE_ON_CREATE
+
+
+# ── planning simulation (Phase D) ───────────────────────────────────────────
+
+
+def _snap(task_id, **kw):
+    return triage.TaskSnapshot(id=task_id, title=task_id, **kw)
+
+
+def test_project_update_coerces_iso_dates_and_leaves_input_untouched():
+    original = _snap("a", target_date=MONDAY, estimated_effort=2.0)
+    [after] = triage.project([original], [{"op": "update", "todo_id": "a", "changes": {"target_date": "2026-08-05"}}])
+    assert after.target_date == date(2026, 8, 5)
+    assert original.target_date == MONDAY
+
+
+def test_project_create_delete_and_clear():
+    tasks = [_snap("a", target_date=MONDAY), _snap("b", target_date=MONDAY)]
+    after = triage.project(tasks, [
+        {"op": "delete", "todo_id": "a"},
+        {"op": "update", "todo_id": "b", "changes": {"target_date": None}},
+        {"op": "create", "changes": {"title": "new", "description": "dropped", "estimated_effort": 1.0}},
+    ])
+    by_title = {t.title: t for t in after}
+    assert set(by_title) == {"b", "new"}
+    assert by_title["b"].target_date is None
+    assert by_title["new"].estimated_effort == 1.0
+
+
+def test_project_rejects_unknown_ids():
+    with pytest.raises(ValueError):
+        triage.project([_snap("a")], [{"op": "update", "todo_id": "zzz", "changes": {}}])
+
+
+def test_attributed_hours_spreads_ranges():
+    t = _snap("a", start_date=MONDAY, end_date=MONDAY + timedelta(days=3), estimated_effort=6.0)
+    assert triage.attributed_hours(t, MONDAY) == 1.5
+    assert triage.attributed_hours(t, MONDAY + timedelta(days=4)) == 0.0

@@ -4,14 +4,14 @@
     POST /api/chat/messages   -> send a message; SSE stream of the reply
 
 `app/agent/service.py` owns the model loop and persistence; this router is a
-thin adapter — load/save the conversation, format events as SSE, translate the
-user-planning defaults until Phase D ships real settings.
+thin adapter — load/save the conversation and the user's planning
+preferences, format events as SSE.
 """
 from __future__ import annotations
 
 import json
 import re
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
@@ -19,6 +19,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from .. import planning
 from ..agent import service
 from ..auth import get_current_user
 from ..database import get_db
@@ -26,17 +27,6 @@ from ..models import Message, Proposal, User
 from .proposals import PROPOSAL_EXPIRY_HOURS, ProposalOut, _to_proposal_out
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
-
-# Until Phase D ships `user_planning_preferences`, every conversation uses
-# these. Keep in sync with evals/runner.py's DEFAULT_PREFERENCES in spirit —
-# they don't share code (the eval harness must not depend on the router).
-DEFAULT_PREFERENCES: dict = {
-    "daily_capacity_hours": 4.0,
-    "workdays": [1, 2, 3, 4, 5],
-    "urgency_horizon_days": 3,
-    "timezone": "UTC",  # unused until Phase D — `today` is the server date
-    "notes": None,
-}
 
 _DATE_PREFIX_RE = re.compile(r"^\(Today is [^)]*\)\n\n")
 
@@ -78,8 +68,11 @@ def _summarize_history(rows: list[Message]) -> list[ChatHistoryItem]:
         if row.role == "user":
             if _is_tool_result_row(content):
                 continue
-            text = "".join(b.get("text", "") for b in content if b.get("type") == "text")
-            items.append(ChatHistoryItem(role="user", text=_strip_date_prefix(text)))
+            texts = [b.get("text", "") for b in content if b.get("type") == "text"]
+            # Current turns are [context, message] — show the message only.
+            # Turns persisted before Phase D are one block with a date prefix.
+            text = texts[-1] if len(texts) > 1 else _strip_date_prefix("".join(texts))
+            items.append(ChatHistoryItem(role="user", text=text))
             pending_tool_calls = []
             continue
 
@@ -141,6 +134,7 @@ async def post_chat_message(
         raise HTTPException(status_code=503, detail="The assistant isn't configured on this server yet.")
 
     convo = await service.get_or_create_conversation(db, current_user.id)
+    preferences = await planning.load_preferences(db, current_user.id)
 
     async def event_stream():
         async for event in service.stream_turn(
@@ -148,8 +142,8 @@ async def post_chat_message(
             user_id=current_user.id,
             conversation_id=convo.id,
             message=body.message,
-            today=date.today(),
-            preferences=DEFAULT_PREFERENCES,
+            today=planning.today_for(preferences),
+            preferences=preferences,
         ):
             if event["type"] == "result":
                 result = event["result"]

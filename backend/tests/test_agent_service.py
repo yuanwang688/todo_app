@@ -41,7 +41,7 @@ def usage(**over) -> Usage:
 
 def text_message(text: str, *, stop_reason: str = "end_turn", **usage_over) -> Message:
     return Message(
-        id="msg_1", model="claude-opus-5", role="assistant", type="message",
+        id="msg_1", model="claude-haiku-5-5", role="assistant", type="message",
         content=[TextBlock(type="text", text=text, citations=None)],
         stop_reason=stop_reason, stop_sequence=None, usage=usage(**usage_over),
     )
@@ -49,7 +49,7 @@ def text_message(text: str, *, stop_reason: str = "end_turn", **usage_over) -> M
 
 def tool_use_message(name: str, tool_input: dict, *, tool_id: str = "toolu_1", **usage_over) -> Message:
     return Message(
-        id="msg_1", model="claude-opus-5", role="assistant", type="message",
+        id="msg_1", model="claude-haiku-5-5", role="assistant", type="message",
         content=[ToolUseBlock(type="tool_use", id=tool_id, name=name, input=tool_input)],
         stop_reason="tool_use", stop_sequence=None, usage=usage(**usage_over),
     )
@@ -57,7 +57,7 @@ def tool_use_message(name: str, tool_input: dict, *, tool_id: str = "toolu_1", *
 
 def refusal_message() -> Message:
     return Message(
-        id="msg_1", model="claude-opus-5", role="assistant", type="message",
+        id="msg_1", model="claude-haiku-5-5", role="assistant", type="message",
         content=[], stop_reason="refusal", stop_sequence=None, usage=usage(),
     )
 
@@ -168,7 +168,7 @@ async def test_second_turn_with_real_block_types_does_not_reintroduce_parsed_out
     replay — this is the exact shape that 400'd against the real API before
     `_replayable_block` existed."""
     parsed_reply = Message(
-        id="msg_1", model="claude-opus-5", role="assistant", type="message",
+        id="msg_1", model="claude-haiku-5-5", role="assistant", type="message",
         content=[ParsedTextBlock(type="text", text="All clear.", citations=None, parsed_output=None)],
         stop_reason="end_turn", stop_sequence=None, usage=usage(),
     )
@@ -216,8 +216,9 @@ async def test_persists_user_and_assistant_turns(db, user, conversation, monkeyp
         select(MessageRow).where(MessageRow.conversation_id == conversation.id).order_by(MessageRow.seq)
     )).scalars().all()
     assert [r.role for r in rows] == ["user", "assistant"]
-    assert "Anything overdue?" in rows[0].content[0]["text"]
-    assert rows[0].content[0]["text"].startswith("(Today is Monday, August 03, 2026.)")
+    context, msg = rows[0].content
+    assert context["text"].startswith("(Today is Monday, August 03, 2026.)")
+    assert msg["text"] == "Anything overdue?"
     assert rows[1].content[0]["text"] == "All clear."
 
 
@@ -389,9 +390,9 @@ async def test_second_turn_sees_first_turns_history(db, user, conversation, monk
     second_request_messages = client.messages.calls[1]["messages"]
     # history (2 rows from turn 1) + this turn's new user message
     assert len(second_request_messages) == 3
-    assert "first question" in second_request_messages[0]["content"][0]["text"]
+    assert second_request_messages[0]["content"][-1]["text"] == "first question"
     assert second_request_messages[1]["content"][0]["text"] == "First answer."
-    assert "second question" in second_request_messages[2]["content"][0]["text"]
+    assert second_request_messages[2]["content"][-1]["text"] == "second question"
 
 
 async def test_get_or_create_conversation_is_idempotent(db, user):
@@ -409,9 +410,31 @@ async def test_cache_control_on_last_system_block_only(db, user, conversation, m
                             message="hi", today=TODAY, preferences=PREFS)
 
     system = client.messages.calls[0]["system"]
-    assert len(system) == 2
-    assert "cache_control" not in system[0]
-    assert system[-1]["cache_control"] == {"type": "ephemeral"}
+    assert len(system) == 1
+    assert system[0]["cache_control"] == {"type": "ephemeral"}
+
+
+async def test_system_is_identical_across_preferences_and_preferences_ride_in_the_user_turn(
+    db, user, conversation, monkeypatch
+):
+    """History must stay append-only: Haiku 5.5 400s on replayed thinking
+    blocks once anything before them changes. Saving new planning
+    preferences mid-conversation must therefore not touch `system` or any
+    earlier message — only the new user turn carries the new values."""
+    client = install_fake_client(monkeypatch, [text_message("one"), text_message("two")])
+    await service.run_turn(db=db, user_id=user.id, conversation_id=conversation.id,
+                            message="first", today=TODAY, preferences=PREFS)
+    changed = {**PREFS, "daily_capacity_hours": 7.5, "notes": "Mornings only."}
+    await service.run_turn(db=db, user_id=user.id, conversation_id=conversation.id,
+                            message="second", today=TODAY, preferences=changed)
+
+    first, second = client.messages.calls
+    assert first["system"] == second["system"]
+    # The first turn's user message is replayed byte-for-byte on the second call.
+    assert second["messages"][0] == first["messages"][0]
+    context, msg = second["messages"][-1]["content"]
+    assert "7.5h" in context["text"] and "Mornings only." in context["text"]
+    assert msg == {"type": "text", "text": "second"}
 
 
 async def test_effort_and_model_are_set(db, user, conversation, monkeypatch):
@@ -424,8 +447,10 @@ async def test_effort_and_model_are_set(db, user, conversation, monkeypatch):
     assert call["model"] == service.MODEL
     assert call["output_config"] == {"effort": "medium"}
     assert "thinking" not in call  # adaptive-by-default; never disabled (see service.py docstring)
+    for param in ("temperature", "top_p", "top_k"):
+        assert param not in call  # any non-default sampling value is a 400 on Sonnet/Haiku 5.5
 
 
-def test_production_model_default_is_opus():
-    assert Settings.model_fields["anthropic_model"].default == "claude-opus-5"
+def test_production_model_default_is_sonnet():
+    assert Settings.model_fields["anthropic_model"].default == "claude-sonnet-5-5"
     assert Settings.model_fields["anthropic_base_url"].default == ""

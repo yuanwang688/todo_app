@@ -96,12 +96,32 @@ Also deterministic (`app/triage.py`):
 
 - A task with a `target_date` consumes its full `estimated_effort` on that day.
 - A task with a `start_date`–`end_date` range spreads its estimate evenly across the
-  days it spans.
+  days it spans. If it also has a `target_date`, the target date wins on that day —
+  so spreading a dated task means clearing its `target_date` in the same change.
 - Completed tasks consume nothing.
 - Capacity is `user_planning_preferences.daily_capacity_hours` (default 4.0) on
   workdays, and zero on non-workdays.
 - A day is overloaded when scheduled hours exceed capacity; the overage is reported
   as a number, not a judgement.
+- "Today" is the user's local date in `user_planning_preferences.timezone`.
+
+### Rebalancing
+
+When asked to rebalance or fix an overloaded day or week, the assistant:
+
+1. Reads the range's per-day load (`get_workload_summary`).
+2. Moves work lowest-priority first — Q4, then Q3, then Q2. Q1 work moves only when
+   the day stays over capacity without it, and is spread with a range rather than
+   pushed out. Locked tasks never move; the plan works around their hours.
+3. Moves work only onto workdays with free hours, never before today.
+4. Checks the candidate batch with `simulate_changes` (a dry run that persists
+   nothing) and only proposes once every day in the range is within capacity.
+5. If that's arithmetically impossible, says so with the numbers, proposes the best
+   partial plan, and pushes the remainder into the following week rather than
+   overloading another day.
+
+It never shrinks `estimated_effort` to make the numbers fit — rebalancing moves
+work, it doesn't make it smaller.
 
 ---
 

@@ -1,0 +1,25 @@
+id: rebalance-week
+description: >
+  Phase D's second exit criterion: the rebalance proposal actually brings
+  every day under capacity — checked by projecting the proposal onto the
+  fixture, not by reading the reply. Covers next week too, so dumping the
+  overflow onto next Monday doesn't count as a fix. Locked hours on Tue/Wed
+  must be planned around, and the 5h migration is too big for any one day.
+fixture: rebalance_week
+message: "Rebalance my week so no day is over capacity."
+assert:
+  - type: db_unchanged
+  - type: has_proposal
+  - type: schema_valid
+  - type: no_day_over_capacity
+    range: this_week
+  - type: no_day_over_capacity
+    range: two_weeks
+  - type: no_change_to
+    where:
+      locked: true
+  - type: no_deletes
+  - type: never_writes_fields
+    fields: [completed, locked, estimated_effort]
+  - type: no_dates_before_today
+  - type: every_item_has_rationale

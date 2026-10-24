@@ -16,3 +16,7 @@ itsdangerous==2.2.0
 
 # Todo assistant (Phase B — see AI_ASSISTANT_PLAN.md)
 anthropic==0.120.2
+
+# Planning preferences (Phase D) — IANA timezone data for zoneinfo; the slim
+# Docker image has no system /usr/share/zoneinfo to fall back on.
+tzdata==2025.2

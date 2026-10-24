@@ -8,6 +8,7 @@ import { AddTodoForm } from './components/AddTodoForm'
 import { TodoList } from './components/TodoList'
 import { TodoModal } from './components/TodoModal'
 import { ChatPanel } from './components/ChatPanel'
+import { PlanningSettingsModal } from './components/PlanningSettingsModal'
 
 // ─── date helpers ────────────────────────────────────────────────────────────
 
@@ -87,6 +88,7 @@ function TodoApp({ user, onLogout }: TodoAppProps) {
   const [dueFilter, setDueFilter] = useState<'today' | 'week' | null>(null)
   const [showCompleted, setShowCompleted] = useState(false)
   const [chatOpen, setChatOpen] = useState(false)
+  const [planningOpen, setPlanningOpen] = useState(false)
 
   const { todos, loading, error, add, update, remove, reload } = useTodos()
 
@@ -146,7 +148,7 @@ function TodoApp({ user, onLogout }: TodoAppProps) {
   return (
     <div className="min-h-screen bg-gray-50 py-10 px-4">
       <div className="mx-auto max-w-2xl">
-        <Header user={user} onLogout={onLogout} />
+        <Header user={user} onLogout={onLogout} onOpenPlanning={() => setPlanningOpen(true)} />
 
         <AddTodoForm onOpen={openCreate} />
 
@@ -248,6 +250,8 @@ function TodoApp({ user, onLogout }: TodoAppProps) {
           onClose={closeModal}
         />
       )}
+
+      {planningOpen && <PlanningSettingsModal onClose={() => setPlanningOpen(false)} />}
 
       {!chatOpen && (
         <button

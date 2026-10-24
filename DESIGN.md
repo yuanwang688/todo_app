@@ -30,6 +30,11 @@ Build a web-based todo list application with:
 - **Weekly view:** shows tasks whose target date falls within the selected Mon–Sun week, or whose start–end range overlaps it; navigate by week
 - Items are scoped to the authenticated user — no cross-user visibility
 
+### Planning settings
+- Set a daily capacity (hours), which days are workdays (other days count as 0h), the urgency horizon (how many days before a due date a task counts as urgent), a timezone, and free-text planning notes
+- Opened from **Planning** in the header; a user who never saves gets the defaults (4h, Mon–Fri, 3 days, UTC, no notes)
+- The assistant measures workload against these when asked "am I overcommitted?" or to rebalance a week, and "today" is computed in the user's timezone
+
 ### General
 - All state persists in a backend database (not localStorage)
 - The app works on desktop and mobile browsers
@@ -248,6 +253,20 @@ CREATE TABLE todo_revisions (
     created_at         TIMESTAMPTZ DEFAULT now()
 );
 CREATE INDEX ON todo_revisions(todo_id);
+
+-- Phase D: planning preferences. One row per user, created on first save;
+-- until then app.planning.DEFAULT_PREFERENCES applies (GET never writes).
+-- `workdays` is JSONB (list of ISO weekdays, 1 = Mon … 7 = Sun), not
+-- SMALLINT[], so the ORM model also runs on the SQLite test backend.
+CREATE TABLE user_planning_preferences (
+    user_id               UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    daily_capacity_hours  FLOAT NOT NULL DEFAULT 4.0,     -- (0, 24]
+    workdays              JSONB NOT NULL DEFAULT '[1, 2, 3, 4, 5]',
+    urgency_horizon_days  SMALLINT NOT NULL DEFAULT 3,    -- [0, 30]
+    timezone              TEXT NOT NULL DEFAULT 'UTC',    -- IANA name
+    notes                 TEXT,                            -- injected into the prompt, ≤ 2000 chars
+    updated_at            TIMESTAMPTZ DEFAULT now()
+);
 ```
 
 ---
@@ -267,10 +286,12 @@ All `/api/*` routes require a valid `session` cookie (JWT). Requests without a v
 | `PATCH` | `/api/todos/{id}` | Updates any writable field on a todo |
 | `DELETE` | `/api/todos/{id}` | Deletes a todo |
 | `GET` | `/api/chat` | The user's rolling conversation, collapsed to display bubbles (`{ conversation_id, configured, messages, pending_proposals }`) |
-| `POST` | `/api/chat/messages` | Sends a message; streams the reply as SSE (`text_delta`, `tool_call`, `proposal_ready`, `error`, `done`). `503` if `ANTHROPIC_API_KEY` is unset. |
+| `POST` | `/api/chat/messages` | Sends a message; streams the reply as SSE (`text_delta`, `tool_call`, `proposal_ready`, `error`, `done`). `503` if `ANTHROPIC_API_KEY` is unset. The turn uses the user's planning preferences, with "today" computed in their timezone. |
 | `GET` | `/api/proposals/{id}` | Fetch a proposal + its items. `404` if not the caller's; a `pending` proposal older than 24h flips to `expired` on read. |
 | `POST` | `/api/proposals/{id}/apply` | Body `{ item_ids: [...] }`. All-or-nothing on the selected set — validates every item (locked / writable-field whitelist / staleness) before any write; one blocked item blocks the whole batch and the proposal stays `pending`. `409` if not pending. |
 | `POST` | `/api/proposals/{id}/reject` | Marks the proposal `rejected`; no todo is touched. `409` if not pending. |
+| `GET` | `/api/planning-preferences` | `{ daily_capacity_hours, workdays, urgency_horizon_days, timezone, notes }` — the saved row, or the defaults if none. |
+| `PUT` | `/api/planning-preferences` | Replaces all five fields. `422` on capacity outside (0, 24], empty/out-of-range workdays, horizon outside [0, 30], unknown IANA timezone, notes over 2000 chars. Workdays are deduped and sorted; blank notes become `null`. |
 | `POST` | `/api/proposals/{id}/undo` | Best-effort per item: walks `todo_revisions` newest-first and restores `before`, writing compensating revisions. `409` if not `applied`. |
 
 All responses are JSON except `/api/chat/messages`, which streams `text/event-stream`. Errors follow `{ "detail": "<message>" }` (FastAPI default).
@@ -352,13 +373,13 @@ npm run dev          # Vite dev server on :5173, proxies /api/* to localhost:800
 Neon provides free branching — use a separate Neon branch for local dev so migrations can be tested without touching the production database.
 
 **Assistant model in dev.** The agent loop reads its model and endpoint from
-settings: `ANTHROPIC_MODEL` (default `claude-opus-5`, the production model) and
+settings: `ANTHROPIC_MODEL` (default `claude-sonnet-5-5`, the production model) and
 `ANTHROPIC_BASE_URL` (default unset, i.e. the Claude API). Production sets
 neither. For local work:
 
 - `backend/.env.example` sets `ANTHROPIC_MODEL=claude-haiku-5-5`. That's real
   Claude with the same request surface (tools, streaming, effort, caching) at
-  about 1/50th of Opus 5's per-token price.
+  about 1/20th of Sonnet 5.5's per-token price.
 - `scripts/dev_up.sh --ollama` runs Ollama in Docker and points the backend at
   its Anthropic-compatible `/v1/messages` endpoint with a placeholder key. It's
   free, but a small local model is far weaker at tool use and the triage
@@ -374,7 +395,7 @@ neither. For local work:
   `execute_tool` checks argument names against each schema itself and
   returns a mismatch to the model as a tool error.
 - Evals grade whatever `ANTHROPIC_MODEL` names. Run them as
-  `ANTHROPIC_MODEL=claude-opus-5 pytest evals` to grade production, and never
+  `ANTHROPIC_MODEL=claude-sonnet-5-5 pytest evals` to grade production, and never
   against Ollama.
 
 ---
