@@ -88,7 +88,7 @@ function TodoApp({ user, onLogout }: TodoAppProps) {
   const [showCompleted, setShowCompleted] = useState(false)
   const [chatOpen, setChatOpen] = useState(false)
 
-  const { todos, loading, error, add, update, remove } = useTodos()
+  const { todos, loading, error, add, update, remove, reload } = useTodos()
 
   const openCreate = () => { setEditingTodo(undefined); setModalOpen(true) }
   const openEdit = (todo: Todo) => { setEditingTodo(todo); setModalOpen(true) }
@@ -258,7 +258,7 @@ function TodoApp({ user, onLogout }: TodoAppProps) {
           💬 Assistant
         </button>
       )}
-      <ChatPanel open={chatOpen} onClose={() => setChatOpen(false)} />
+      <ChatPanel open={chatOpen} onClose={() => setChatOpen(false)} onTodosChanged={reload} />
     </div>
   )
 }

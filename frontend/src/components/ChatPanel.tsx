@@ -1,9 +1,12 @@
 import { useEffect, useRef, useState, FormEvent } from 'react'
 import { ChatHistoryItem, getChatHistory, streamChatMessage } from '../api/chat'
+import { Proposal, proposalsApi } from '../api/proposals'
+import { ProposalCard } from './ProposalCard'
 
 interface Props {
   open: boolean
   onClose: () => void
+  onTodosChanged: () => void
 }
 
 interface DisplayMessage {
@@ -23,9 +26,10 @@ function toolChipLabel(name: string): string {
   return TOOL_LABELS[name] ?? name
 }
 
-export function ChatPanel({ open, onClose }: Props) {
+export function ChatPanel({ open, onClose, onTodosChanged }: Props) {
   const [configured, setConfigured] = useState<boolean | null>(null)
   const [messages, setMessages] = useState<DisplayMessage[]>([])
+  const [proposals, setProposals] = useState<Proposal[]>([])
   const [input, setInput] = useState('')
   const [sending, setSending] = useState(false)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -42,6 +46,7 @@ export function ChatPanel({ open, onClose }: Props) {
             .filter((m) => m.text || m.tool_calls.length > 0)
             .map((m: ChatHistoryItem) => ({ role: m.role, text: m.text, toolCalls: m.tool_calls })),
         )
+        setProposals(history.pending_proposals)
         setLoaded(true)
       })
       .catch((err) => setLoadError(err.message ?? 'Failed to load the assistant.'))
@@ -49,7 +54,11 @@ export function ChatPanel({ open, onClose }: Props) {
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' })
-  }, [messages, sending])
+  }, [messages, proposals, sending])
+
+  function updateProposal(updated: Proposal) {
+    setProposals((prev) => prev.map((p) => (p.id === updated.id ? updated : p)))
+  }
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault()
@@ -63,6 +72,10 @@ export function ChatPanel({ open, onClose }: Props) {
 
     try {
       for await (const event of streamChatMessage(text)) {
+        if (event.type === 'proposal_ready') {
+          proposalsApi.get(event.proposal_id).then((p) => setProposals((prev) => [...prev, p]))
+          continue
+        }
         setMessages((prev) => {
           const next = [...prev]
           const last = next[next.length - 1]
@@ -163,6 +176,10 @@ export function ChatPanel({ open, onClose }: Props) {
                 ) : null}
               </div>
             </div>
+          ))}
+
+          {proposals.map((p) => (
+            <ProposalCard key={p.id} proposal={p} onChange={updateProposal} onTodosChanged={onTodosChanged} />
           ))}
         </div>
 

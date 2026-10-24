@@ -1,13 +1,18 @@
-"""Read-only tools for the todo assistant (Phase B).
+"""Tools for the todo assistant.
 
-Every tool wraps application services, never raw SQL from the model, and every
-number the model can state (quadrant, days-left phrasing, workload hours) is
-computed by `app.triage`, not by the model. See TRIAGE.md §3.
+The three read-only tools wrap application services, never raw SQL from the
+model, and every number the model can state (quadrant, days-left phrasing,
+workload hours) is computed by `app.triage`, not by the model. See TRIAGE.md
+§3. Each read-only executor returns `(content_str, is_error)` — the shape the
+tool-result block needs. Errors are reported to the model as data, not
+raised, so a bad `todo_id` becomes a turn the model can recover from instead
+of a crashed request.
 
-Each executor returns `(content_str, is_error)` — the shape the tool-result
-block needs. Errors are reported to the model as data, not raised, so a bad
-`todo_id` becomes a turn the model can recover from instead of a crashed
-request.
+`propose_changes` (Phase C, the one write path) lives in `propose.py` — its
+validation and persistence are substantial enough, and different enough in
+shape, to not force through the read-only tools' dispatch. `TOOL_SCHEMAS`
+below is still the single list the model sees; `service.py`'s `_run_loop`
+special-cases the name to call `propose.execute_propose_changes` directly.
 """
 from __future__ import annotations
 
@@ -21,6 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import triage
 from ..models import Todo
+from .propose import PROPOSE_CHANGES_SCHEMA
 
 MAX_SEARCH_LIMIT = 50
 DEFAULT_SEARCH_LIMIT = 20
@@ -112,6 +118,7 @@ TOOL_SCHEMAS: list[dict] = [
         },
         "strict": True,
     },
+    PROPOSE_CHANGES_SCHEMA,
 ]
 
 

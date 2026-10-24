@@ -1,3 +1,5 @@
+import uuid
+
 from app.auth import _mint_jwt
 
 
@@ -178,3 +180,65 @@ async def test_locking_does_not_block_the_user_editing_their_own_task(auth_clien
     r = await auth_client.patch(f"/api/todos/{created['id']}", json={"title": "Renamed by owner"})
     assert r.status_code == 200
     assert r.json()["title"] == "Renamed by owner"
+
+
+# ── todo_revisions audit trail (Phase C) ────────────────────────────────────
+
+
+async def test_create_todo_writes_a_revision(auth_client, db):
+    from app.models import TodoRevision
+
+    created = (await auth_client.post("/api/todos", json={"title": "Tracked"})).json()
+
+    result = await db.execute(TodoRevision.__table__.select())
+    revs = result.fetchall()
+    assert len(revs) == 1
+    assert revs[0].todo_id == uuid.UUID(created["id"])
+    assert revs[0].source == "user"
+    assert revs[0].before is None
+    assert revs[0].after["title"] == "Tracked"
+
+
+async def test_update_todo_writes_a_revision_with_before_and_after(auth_client, db):
+    from app.models import TodoRevision
+
+    created = (await auth_client.post("/api/todos", json={"title": "Original"})).json()
+    await auth_client.patch(f"/api/todos/{created['id']}", json={"title": "Updated"})
+
+    result = await db.execute(
+        TodoRevision.__table__.select().where(TodoRevision.__table__.c.todo_id == uuid.UUID(created["id"]))
+    )
+    revs = result.fetchall()
+    assert len(revs) == 2, "one revision for create, one for update"
+    update_rev = revs[-1]
+    assert update_rev.source == "user"
+    assert update_rev.before["title"] == "Original"
+    assert update_rev.after["title"] == "Updated"
+
+
+async def test_update_with_no_fields_does_not_write_a_revision(auth_client, db):
+    from app.models import TodoRevision
+
+    created = (await auth_client.post("/api/todos", json={"title": "Untouched"})).json()
+    await auth_client.patch(f"/api/todos/{created['id']}", json={})
+
+    result = await db.execute(
+        TodoRevision.__table__.select().where(TodoRevision.__table__.c.todo_id == uuid.UUID(created["id"]))
+    )
+    assert len(result.fetchall()) == 1, "only the create revision, no-op update writes nothing"
+
+
+async def test_delete_todo_writes_a_revision_with_after_none(auth_client, db):
+    from app.models import TodoRevision
+
+    created = (await auth_client.post("/api/todos", json={"title": "Doomed"})).json()
+    await auth_client.delete(f"/api/todos/{created['id']}")
+
+    result = await db.execute(
+        TodoRevision.__table__.select().where(TodoRevision.__table__.c.todo_id == uuid.UUID(created["id"]))
+    )
+    revs = result.fetchall()
+    delete_rev = revs[-1]
+    assert delete_rev.source == "user"
+    assert delete_rev.before["title"] == "Doomed"
+    assert delete_rev.after is None
