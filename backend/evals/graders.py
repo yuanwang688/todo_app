@@ -117,6 +117,23 @@ def _changed_fields(ctx: GradeContext) -> set[str]:
     return {f for item in _items(ctx) for f in item.changes}
 
 
+_DATE_FIELDS = ("target_date", "start_date", "end_date")
+
+
+def _coerce_dates(changes: dict) -> dict:
+    """The proposal's raw `changes` carries date fields as the ISO strings the
+    model's tool call sent (see agent_schemas.ProposalItem.changes — untyped
+    `dict[str, Any]`), but snapshot() reads real `date` objects from the ORM.
+    Projecting the proposal onto a snapshot needs both sides in the same
+    type, or `app.triage`'s date comparisons blow up."""
+    out = dict(changes)
+    for field in _DATE_FIELDS:
+        value = out.get(field)
+        if value is not None and not isinstance(value, date):
+            out[field] = date.fromisoformat(str(value))
+    return out
+
+
 def apply_in_memory(before: dict[str, dict], proposal: Proposal | None) -> dict[str, dict]:
     """Project a proposal onto a snapshot without touching the database.
 
@@ -126,18 +143,19 @@ def apply_in_memory(before: dict[str, dict], proposal: Proposal | None) -> dict[
     if proposal is None:
         return after
     for i, item in enumerate(proposal.items):
+        changes = _coerce_dates(item.changes)
         if item.op == "delete":
             after.pop(item.todo_id, None)
         elif item.op == "update":
             if item.todo_id in after:
-                after[item.todo_id].update(item.changes)
+                after[item.todo_id].update(changes)
         elif item.op == "create":
             after[f"__new_{i}"] = {
                 **{k: None for k in next(iter(before.values()), {})},
                 "completed": False,
                 "is_focus": False,
                 "locked": False,
-                **item.changes,
+                **changes,
             }
     return after
 

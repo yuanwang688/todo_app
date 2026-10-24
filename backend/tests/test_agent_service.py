@@ -179,7 +179,9 @@ async def test_second_turn_with_real_block_types_does_not_reintroduce_parsed_out
                                      message="second", today=TODAY, preferences=PREFS)
 
     assert result.error is None
-    rows = (await db.execute(select(MessageRow).where(MessageRow.conversation_id == conversation.id))).scalars().all()
+    rows = (await db.execute(
+        select(MessageRow).where(MessageRow.conversation_id == conversation.id).order_by(MessageRow.seq)
+    )).scalars().all()
     assert "parsed_output" not in rows[1].content[0]
 
 
@@ -210,7 +212,7 @@ async def test_persists_user_and_assistant_turns(db, user, conversation, monkeyp
     )
 
     rows = (await db.execute(
-        select(MessageRow).where(MessageRow.conversation_id == conversation.id).order_by(MessageRow.created_at)
+        select(MessageRow).where(MessageRow.conversation_id == conversation.id).order_by(MessageRow.seq)
     )).scalars().all()
     assert [r.role for r in rows] == ["user", "assistant"]
     assert "Anything overdue?" in rows[0].content[0]["text"]

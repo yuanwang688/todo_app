@@ -5,7 +5,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update
 from ..auth import get_current_user
 from ..database import get_db
-from ..models import Todo, User
+from ..models import Todo, TodoRevision, User
+from ..revisions import snapshot_todo
 from ..schemas import TodoCreate, TodoUpdate, TodoResponse
 
 router = APIRouter(prefix="/api/todos", tags=["todos"])
@@ -34,6 +35,10 @@ async def create_todo(
 ):
     todo = Todo(user_id=current_user.id, **body.model_dump())
     db.add(todo)
+    await db.flush()
+    db.add(TodoRevision(
+        todo_id=todo.id, user_id=current_user.id, before=None, after=snapshot_todo(todo), source="user",
+    ))
     await db.commit()
     await db.refresh(todo)
     return todo
@@ -53,6 +58,9 @@ async def update_todo(
     if not todo:
         raise HTTPException(status_code=404, detail="Todo not found")
     updates = body.model_dump(exclude_unset=True)
+    if not updates:
+        return todo
+    before = snapshot_todo(todo)
     if updates.get("is_focus"):
         await db.execute(
             update(Todo)
@@ -62,6 +70,9 @@ async def update_todo(
     for field, value in updates.items():
         setattr(todo, field, value)
     todo.updated_at = datetime.now(timezone.utc)
+    db.add(TodoRevision(
+        todo_id=todo.id, user_id=current_user.id, before=before, after=snapshot_todo(todo), source="user",
+    ))
     await db.commit()
     await db.refresh(todo)
     return todo
@@ -79,5 +90,8 @@ async def delete_todo(
     todo = result.scalar_one_or_none()
     if not todo:
         raise HTTPException(status_code=404, detail="Todo not found")
+    db.add(TodoRevision(
+        todo_id=todo.id, user_id=current_user.id, before=snapshot_todo(todo), after=None, source="user",
+    ))
     await db.delete(todo)
     await db.commit()

@@ -16,9 +16,11 @@ Design notes that matter if you're changing this file:
   instead of a `tool_use` block, and `<thinking>` tags can leak into the
   visible reply — so `effort` is the depth/cost lever here, not
   `thinking: {type: "disabled"}`.
-- **No mutation tool exists yet.** `propose_changes` is Phase C. Until then
-  `AgentTurnResult.proposal` is always `None` — there is nothing to validate
-  because the model has no way to write.
+- **`propose_changes` is the only write path, and it's not a write.** It
+  validates and persists a `Proposal` row; nothing in `todos` changes until
+  the user calls `/api/proposals/{id}/apply`. `AgentTurnResult.proposal` is
+  set only when the model actually called it this turn — `None` otherwise,
+  including on every turn before Phase C.
 - **Persisted content blocks are rebuilt field-by-field, never
   `block.model_dump(mode="json")` wholesale.** `client.messages.stream()`
   returns `Parsed*` convenience subclasses (e.g. `ParsedTextBlock`) that carry
@@ -40,12 +42,13 @@ from datetime import date
 from typing import Any, AsyncIterator
 
 import anthropic
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..agent_schemas import Proposal
 from ..config import settings
 from ..models import AgentRun, Conversation, Message
+from . import propose
 from .prompt import build_system_blocks, build_user_turn
 from .tools import TOOL_SCHEMAS, execute_tool
 
@@ -105,13 +108,20 @@ async def get_or_create_conversation(db: AsyncSession, user_id: uuid.UUID) -> Co
 
 
 async def _load_history(db: AsyncSession, conversation_id: uuid.UUID) -> list[dict[str, Any]]:
-    result = await db.execute(select(Message).where(Message.conversation_id == conversation_id).order_by(Message.created_at))
+    result = await db.execute(select(Message).where(Message.conversation_id == conversation_id).order_by(Message.seq))
     return [{"role": m.role, "content": m.content} for m in result.scalars().all()]
 
 
 async def _persist_new_messages(db: AsyncSession, conversation_id: uuid.UUID, new_messages: list[dict]) -> None:
+    # seq is app-managed (see migration 007) — every message in this batch
+    # shares one transaction and therefore one `created_at`, so `created_at`
+    # alone can't order a same-turn batch on replay. Allocate seq values
+    # here, in the same order new_messages is in, so that order survives.
+    result = await db.execute(select(func.max(Message.seq)).where(Message.conversation_id == conversation_id))
+    next_seq = (result.scalar() or 0) + 1
     for m in new_messages:
-        db.add(Message(conversation_id=conversation_id, role=m["role"], content=m["content"]))
+        db.add(Message(conversation_id=conversation_id, role=m["role"], content=m["content"], seq=next_seq))
+        next_seq += 1
     await db.commit()
 
 
@@ -168,6 +178,7 @@ async def _run_loop(
     preferences: dict,
     db: AsyncSession,
     user_id: uuid.UUID,
+    conversation_id: uuid.UUID,
 ) -> AsyncIterator[dict]:
     """Yields streaming events (`text_delta`, `tool_call`) and, last, one
     `result` event carrying everything the caller needs to persist and log."""
@@ -195,6 +206,7 @@ async def _run_loop(
     reply_text = ""
     stop_reason: str | None = None
     refusal = False
+    captured_proposal: Proposal | None = None
 
     for _ in range(MAX_TOOL_ITERATIONS):
         async with client.messages.stream(
@@ -234,9 +246,23 @@ async def _run_loop(
             if block.type != "tool_use":
                 continue
             tool_call_names.append(block.name)
-            content_str, is_error = await execute_tool(
-                block.name, block.input, db=db, user_id=user_id, today=today, preferences=preferences
-            )
+            if block.name == "propose_changes":
+                pc_result = await propose.execute_propose_changes(
+                    block.input, db=db, user_id=user_id, conversation_id=conversation_id
+                )
+                content_str, is_error = pc_result.content, pc_result.is_error
+                if not is_error:
+                    captured_proposal = pc_result.proposal
+                    yield {
+                        "type": "proposal_ready",
+                        "proposal_id": str(pc_result.proposal_id),
+                        "summary": pc_result.proposal.summary,
+                        "item_count": len(pc_result.proposal.items),
+                    }
+            else:
+                content_str, is_error = await execute_tool(
+                    block.name, block.input, db=db, user_id=user_id, today=today, preferences=preferences
+                )
             tool_results.append(
                 {"type": "tool_result", "tool_use_id": block.id, "content": content_str, "is_error": is_error}
             )
@@ -253,6 +279,7 @@ async def _run_loop(
         "type": "result",
         "reply_text": reply_text,
         "tool_calls": tool_call_names,
+        "proposal": captured_proposal,
         "usage": usage_totals,
         "stop_reason": stop_reason,
         "refusal": refusal,
@@ -281,7 +308,8 @@ async def stream_turn(
 
     try:
         async for event in _run_loop(
-            client=client, message=message, history=history, today=today, preferences=preferences, db=db, user_id=user_id
+            client=client, message=message, history=history, today=today, preferences=preferences,
+            db=db, user_id=user_id, conversation_id=conversation_id,
         ):
             if event["type"] != "result":
                 yield event
@@ -289,6 +317,7 @@ async def stream_turn(
             result = AgentTurnResult(
                 reply_text=event["reply_text"],
                 tool_calls=event["tool_calls"],
+                proposal=event["proposal"],
                 input_tokens=event["usage"]["input_tokens"],
                 output_tokens=event["usage"]["output_tokens"],
                 cache_read_tokens=event["usage"]["cache_read_input_tokens"],
