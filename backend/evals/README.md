@@ -10,6 +10,17 @@ pytest evals -k dedupe            # one family
 pytest evals --collect-only -q    # list them
 ```
 
+Scenarios grade whatever model `ANTHROPIC_MODEL` names — and `.env.example`
+sets that to Haiku for cheap local dev. To grade the production model, override
+it for the run (env vars beat `.env`):
+
+```bash
+ANTHROPIC_MODEL=claude-opus-5 pytest evals
+```
+
+Don't run them against Ollama (`ANTHROPIC_BASE_URL`): a small local model's
+score says nothing about production.
+
 They are **not** part of `pytest` (the default run is `testpaths = tests`). From
 Phase E they make real API calls and cost money, so they must never run
 implicitly on every push.

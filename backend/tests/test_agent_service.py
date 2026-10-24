@@ -26,6 +26,7 @@ from sqlalchemy import select
 
 from app.agent import service
 from app.agent.service import _replayable_block
+from app.config import Settings
 from app.models import AgentRun, Message as MessageRow, Todo
 
 TODAY = date(2026, 8, 3)
@@ -273,6 +274,30 @@ async def test_tool_error_is_reported_as_is_error_not_raised(db, user, conversat
     assert "couldn't find" in result.reply_text
 
 
+async def test_tool_call_with_bad_arguments_is_reported_not_raised(db, user, conversation, monkeypatch):
+    # The Claude API enforces the strict schemas, but Ollama doesn't — a local
+    # model once sent `quadrant` to search_todos and the TypeError killed the
+    # stream. Unexpected and missing arguments must come back as a tool error.
+    client = install_fake_client(monkeypatch, [
+        tool_use_message("search_todos", {"quadrant": "Q1"}, tool_id="toolu_1"),
+        tool_use_message("get_workload_summary", {"start_date": "2026-08-03"}, tool_id="toolu_2"),
+        text_message("Sorry, let me try that differently."),
+    ])
+    result = await service.run_turn(
+        db=db, user_id=user.id, conversation_id=conversation.id,
+        message="what's urgent?", today=TODAY, preferences=PREFS,
+    )
+    assert result.error is None
+    assert result.tool_calls == ["search_todos", "get_workload_summary"]
+
+    first = client.messages.calls[1]["messages"][-1]["content"][0]
+    assert first["is_error"] is True
+    assert '"unexpected": ["quadrant"]' in first["content"]
+    second = client.messages.calls[2]["messages"][-1]["content"][0]
+    assert second["is_error"] is True
+    assert '"missing": ["end_date"]' in second["content"]
+
+
 async def test_unresolved_tool_loop_stops_gracefully(db, user, conversation, monkeypatch):
     """The model keeps calling tools forever — must not hang or crash."""
     script = [tool_use_message("search_todos", {}) for _ in range(service.MAX_TOOL_ITERATIONS)]
@@ -392,6 +417,13 @@ async def test_effort_and_model_are_set(db, user, conversation, monkeypatch):
     await service.run_turn(db=db, user_id=user.id, conversation_id=conversation.id,
                             message="hi", today=TODAY, preferences=PREFS)
     call = client.messages.calls[0]
-    assert call["model"] == "claude-opus-5"
+    # MODEL follows ANTHROPIC_MODEL, which a dev .env may point at Haiku; the
+    # default (what production runs) is pinned separately below.
+    assert call["model"] == service.MODEL
     assert call["output_config"] == {"effort": "medium"}
     assert "thinking" not in call  # adaptive-by-default; never disabled (see service.py docstring)
+
+
+def test_production_model_default_is_opus():
+    assert Settings.model_fields["anthropic_model"].default == "claude-opus-5"
+    assert Settings.model_fields["anthropic_base_url"].default == ""

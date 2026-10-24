@@ -14,6 +14,12 @@ class Settings(BaseSettings):
     # Todo assistant (Phase B). Empty string disables the /api/chat routes with
     # a clear 503 rather than a confusing downstream auth error.
     anthropic_api_key: str = ""
+    # Dev-only overrides — leave unset in production. ANTHROPIC_MODEL swaps in a
+    # cheaper model (e.g. claude-haiku-5-5); ANTHROPIC_BASE_URL points the client
+    # at an Anthropic-compatible local server such as Ollama
+    # (http://localhost:11434, with any placeholder ANTHROPIC_API_KEY).
+    anthropic_model: str = "claude-opus-5"
+    anthropic_base_url: str = ""
 
     model_config = {"env_file": ".env", "extra": "ignore"}
 

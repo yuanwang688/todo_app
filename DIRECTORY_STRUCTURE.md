@@ -139,7 +139,8 @@ frontend/
 ```
 scripts/dev_up.sh  — one-command local dev instance: Dockerized Postgres, migrate, seed 25
                       tasks, start both servers, one-click /auth/dev-login. Never touches
-                      the production Neon database.
+                      the production Neon database. --ollama runs the assistant on a
+                      local Ollama model instead of the Claude API.
 ```
 
 ## The shape worth noticing
