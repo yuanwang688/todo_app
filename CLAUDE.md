@@ -22,7 +22,8 @@ See `DIRECTORY_STRUCTURE.md` for a file-by-file tour of the repo.
 (Docker), migrates it, seeds 25 example tasks, and starts both dev servers — then visit
 `http://localhost:5173/auth/dev-login` for a one-click login, no Google OAuth needed. Never
 touches the production Neon database. `--fresh` wipes and reseeds; Ctrl+C stops everything
-(seed data persists). See the script's header comment for details.
+(seed data persists). `--ollama` runs the assistant on a free local model (Ollama in Docker)
+instead of the Claude API. See the script's header comment for details.
 
 For the manual setup (real OAuth, your own data):
 

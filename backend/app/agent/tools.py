@@ -299,6 +299,16 @@ EXECUTORS: dict[str, Executor] = {
 }
 
 
+# Each tool's allowed and required argument names, from its schema. The Claude
+# API enforces these itself (`strict: true`), but Anthropic-compatible local
+# servers like Ollama don't — a stray argument would otherwise reach the
+# executor as a TypeError and crash the turn.
+_TOOL_ARGS: dict[str, tuple[set[str], set[str]]] = {
+    t["name"]: (set(t["input_schema"]["properties"]), set(t["input_schema"].get("required", [])))
+    for t in TOOL_SCHEMAS
+}
+
+
 async def execute_tool(
     name: str,
     tool_input: dict[str, Any],
@@ -311,6 +321,16 @@ async def execute_tool(
     executor = EXECUTORS.get(name)
     if executor is None:
         return json.dumps({"error": f"unknown tool {name!r}"}), True
+    allowed, required = _TOOL_ARGS[name]
+    unexpected = sorted(set(tool_input) - allowed)
+    missing = sorted(required - set(tool_input))
+    if unexpected or missing:
+        return json.dumps({
+            "error": "invalid arguments",
+            "unexpected": unexpected,
+            "missing": missing,
+            "allowed": sorted(allowed),
+        }), True
     try:
         if name == "get_workload_summary":
             return await executor(db, user_id, today, preferences, **tool_input)

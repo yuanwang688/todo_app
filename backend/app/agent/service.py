@@ -52,7 +52,7 @@ from . import propose
 from .prompt import build_system_blocks, build_user_turn
 from .tools import TOOL_SCHEMAS, execute_tool
 
-MODEL = "claude-opus-5"
+MODEL = settings.anthropic_model
 EFFORT = "medium"
 MAX_TOKENS = 8000
 MAX_TOOL_ITERATIONS = 6
@@ -81,7 +81,9 @@ def _get_client() -> anthropic.AsyncAnthropic | None:
     if not settings.anthropic_api_key:
         return None
     if _client is None:
-        _client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+        _client = anthropic.AsyncAnthropic(
+            api_key=settings.anthropic_api_key, base_url=settings.anthropic_base_url or None
+        )
     return _client
 
 

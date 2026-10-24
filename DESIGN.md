@@ -351,6 +351,32 @@ npm run dev          # Vite dev server on :5173, proxies /api/* to localhost:800
 
 Neon provides free branching — use a separate Neon branch for local dev so migrations can be tested without touching the production database.
 
+**Assistant model in dev.** The agent loop reads its model and endpoint from
+settings: `ANTHROPIC_MODEL` (default `claude-opus-5`, the production model) and
+`ANTHROPIC_BASE_URL` (default unset, i.e. the Claude API). Production sets
+neither. For local work:
+
+- `backend/.env.example` sets `ANTHROPIC_MODEL=claude-haiku-5-5`. That's real
+  Claude with the same request surface (tools, streaming, effort, caching) at
+  about 1/50th of Opus 5's per-token price.
+- `scripts/dev_up.sh --ollama` runs Ollama in Docker and points the backend at
+  its Anthropic-compatible `/v1/messages` endpoint with a placeholder key. It's
+  free, but a small local model is far weaker at tool use and the triage
+  policy, so use it to test plumbing (streaming, tool chips, persistence,
+  errors), not behaviour. It uses the NVIDIA GPU when Docker can reach it
+  (needs `nvidia-container-toolkit`) and keeps the model loaded until the
+  script stops, so only the first message after startup is slow.
+  `OLLAMA_MODEL` picks the model. The default is `qwen2.5:7b` with a GPU
+  (3–5 s per turn on a 6 GB card) and `qwen2.5:3b` without one. Both are
+  non-thinking models, since thinking models like qwen3 take minutes per turn
+  on CPU. Ollama ignores `cache_control`, so `agent_runs` token and cache
+  figures aren't meaningful. It also ignores `strict` tool schemas, so
+  `execute_tool` checks argument names against each schema itself and
+  returns a mismatch to the model as a tool error.
+- Evals grade whatever `ANTHROPIC_MODEL` names. Run them as
+  `ANTHROPIC_MODEL=claude-opus-5 pytest evals` to grade production, and never
+  against Ollama.
+
 ---
 
 ## 12. Cost Estimate (GCP, low traffic)
